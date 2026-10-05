@@ -53,6 +53,7 @@ set(RUNTIME_SOURCES
     runtime/src/ps2_audio.c
     runtime/src/ps2_sif.c
     runtime/src/ps2_vfs.c
+    runtime/src/ps2_region.c
     runtime/src/ps2_hle_sif.c
     runtime/src/ps2_hle_cdvd.c
     runtime/src/ps2_hle_pad.c
@@ -143,7 +144,10 @@ target_compile_options(ac5 PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti>)
 
 set(REPLAY_SOURCES ${RUNTIME_SOURCES})
+# ps2_region.c needs the symbols of the generated ps2_image.c, which gsreplay
+# does not link.
 list(REMOVE_ITEM REPLAY_SOURCES runtime/src/ps2_main.c
+                                runtime/src/ps2_region.c
                                 runtime/src/ps2_lua.c
                                 runtime/src/ps2_modapi.c
                                 runtime/src/ps2_mod.c

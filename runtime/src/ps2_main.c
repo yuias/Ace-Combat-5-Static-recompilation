@@ -9,6 +9,7 @@
 #include "ps2_hook.h"
 #include "ps2_modapi.h"
 #include "ps2_vfs.h"
+#include "ps2_region.h"
 #include "rn.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -638,8 +639,12 @@ int main(int argc, char **argv) {
     }
     if (load_image(dir) != 0) return 1;
     ps2_mod_init();
-    if (disc && ps2_vfs_open(disc) != 0)
-        ps2_log("warning: no disc at '%s'; CDVD requests will fail", disc);
+    if (disc) {
+        if (ps2_vfs_open(disc) != 0)
+            ps2_log("warning: no disc at '%s'; CDVD requests will fail", disc);
+        else if (ps2_region_check_disc() != 0)
+            return 1;
+    }
     ps2_mod_start();
     rn_init();
     rn_dump_init();
