@@ -19,8 +19,6 @@ ALLOW = (
     ("runtime/src/ps2_gs.c", 0x00200000,
      "GS-side base in the movie/blit path, not a guest address"),
     ("runtime/src/ps2_hle_iop.c", 0x00100000, "size limits"),
-    ("runtime/src/ps2_hle_iop.c", 0x00448270,
-     "gp base of three gp-relative reads; removed once they use the list entries"),
     ("runtime/src/ps2_kernel.c", 0x00100000, "stack and heap sizes"),
     ("runtime/src/ps2_main.c", 0x00100000,
      "profiler range for ps2_prof_enable (diagnostic, covers both regions' game code)"),

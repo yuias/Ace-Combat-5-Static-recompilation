@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "ps2_addr.h"
 #include "ps2_hle.h"
 #include "ps2_hook.h"
 #include "ps2_params.h"
@@ -11,14 +12,14 @@
 enum { T_S8, T_U8, T_S16, T_U16, T_S32, T_INT, T_FLOAT, T_STRING };
 
 static const struct { u32 addr; int type; const char *what; } getters[] = {
-    { 0x00324568u, T_S8,     "s8"     },
-    { 0x00324688u, T_U8,     "u8"     },
-    { 0x003247B0u, T_S16,    "s16"    },
-    { 0x00324910u, T_U16,    "u16"    },
-    { 0x00324A68u, T_S32,    "s32"    },
-    { 0x00324BC0u, T_INT,    "int"    },
-    { 0x00324D10u, T_FLOAT,  "float"  },
-    { 0x00324E68u, T_STRING, "string" },
+    { PS2_A(AC5_PARAM_S8), T_S8,     "s8"     },
+    { PS2_A(AC5_PARAM_U8), T_U8,     "u8"     },
+    { PS2_A(AC5_PARAM_S16), T_S16,    "s16"    },
+    { PS2_A(AC5_PARAM_U16), T_U16,    "u16"    },
+    { PS2_A(AC5_PARAM_S32), T_S32,    "s32"    },
+    { PS2_A(AC5_PARAM_INT), T_INT,    "int"    },
+    { PS2_A(AC5_PARAM_FLOAT), T_FLOAT,  "float"  },
+    { PS2_A(AC5_PARAM_STRING), T_STRING, "string" },
 };
 #define NGETTERS (sizeof getters / sizeof getters[0])
 #define LIST_STREAMING 1228u

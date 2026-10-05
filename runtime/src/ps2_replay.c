@@ -608,6 +608,8 @@ const unsigned       ps2_func_count = 0u;
 const u32            ps2_entry_point = 0u;
 const ps2_symbol     ps2_symbols[] = { { 0u, "" } };
 const unsigned       ps2_symbol_count = 0u;
+/* Only named in a ps2_hle_iop.c message; gsreplay has no region. */
+const char           ps2_region_config[] = "config";
 
 volatile int ps2_capture_request;
 void ps2_modapi_field_tick(void) {}

@@ -1,5 +1,6 @@
 #include "ps2_runtime.h"
 #include "ps2_settings.h"
+#include "ps2_addr.h"
 
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -433,7 +434,7 @@ void ps2_settings_touch(int dirty) {
 
 int ps2_settings_take_dirty(void) { return atomic_exchange(&cfg_dirty, 0); }
 
-static const u32 ws_addr[2]  = { 0x00440828u, 0x0044082Cu };
+static const u32 ws_addr[2]  = { PS2_A(AC5_WS_0), PS2_A(AC5_WS_1) };
 static const u32 ws_orig[2]  = { 0x440315C2u, 0x441013D7u };
 static const u32 ws_patch[2] = { 0x43D638F3u, 0x43EB7385u };
 
