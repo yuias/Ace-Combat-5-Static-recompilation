@@ -364,6 +364,53 @@ def test_exact_pass_synthetic():
     assert [(r.us_start, r.us_end) for r in cm.code_ranges()][0] == (0x1000, 0x1018)
 
 
+def test_unit_free_gaps():
+    seq = lambda hi, n: [hi + k for k in range(n)]
+    a, b = seq(0x110, 6), seq(0x120, 6)
+    w = lambda i: 0x1000 + 4 * i
+    units = lambda: [Unit(w(0), w(6), w(0), "fa", True), Unit(w(12), w(18), w(12), "fb", True)]
+
+    def build(gap_us, gap_jp, raw_jp=None, pad=2):
+        us = plain_stream(0x1000, a + gap_us + b)
+        norm = [0] * pad + a + gap_jp + b
+        raw = list(norm) if raw_jp is None else raw_jp
+        cm = CodeMatcher(us, Stream(0x2000, raw, norm, {}, {}), units(), log=lambda *x: None)
+        cm.run()
+        return cm
+
+    # IDA has no unit over the 6 gap words. Normalized words agree, raw ones do
+    # not (masked immediates), so the whole gap is mapped at the shared shift.
+    gap = seq(0x300, 6)
+    raw = [0] * 2 + a + gap + b
+    raw[2 + 6 + 1] = 0x777
+    cm = build(gap, gap, raw)
+    rows = [(r.us_start, r.us_end, r.delta, r.source, r.confidence) for r in cm.code_ranges()]
+    assert rows == [(w(0), w(6), 0x1008, "func", "high"), (w(6), w(12), 0x1008, "gap", "medium"),
+                    (w(12), w(18), 0x1008, "func", "high")], rows
+    assert cm.stats["unit_free_gaps"] == 1 and cm.stats["unit_free_bytes"] == 24
+    assert cm.code_translate(w(7)) == 0x2000 + 4 * 9
+
+    # Raw-equal gaps are padding-like and stay "func"/high through the earlier rule.
+    cm = build(gap, gap)
+    assert [(r.us_start, r.us_end, r.source) for r in cm.code_ranges()] == [(w(0), w(18), "func")]
+
+    # One replaced word is never mapped; the equal blocks around it are, as medium.
+    cm = build(gap, gap[:2] + [0x999] + gap[3:])
+    rows = [(r.us_start, r.us_end, r.delta, r.source, r.confidence) for r in cm.code_ranges()]
+    assert rows[1:3] == [(w(6), w(8), 0x1008, "gap", "medium"),
+                         (w(9), w(12), 0x1008, "gap", "medium")], rows
+    assert cm.code_translate(w(8)) is None
+    assert cm.stats["unit_free_gaps"] == 1 and cm.stats["unit_free_bytes"] == 20
+
+    # Neighbours at different shifts: nothing is inferred between them.
+    us = plain_stream(0x1000, a + gap + b)
+    jp = plain_stream(0x2000, [0] * 2 + a + gap + [0] * 2 + b)
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.run()
+    assert all(r.source == "func" for r in cm.code_ranges())
+    assert cm.stats["unit_free_gaps"] == 0
+
+
 def ref_streams(jp_s_target=0x2038, jp_extra=None):
     """US A B S C G D; JP inserts two words before B. S is a 2-word stub whose
     raw words differ (a masked call target) so only A's call reaches it; G is a
@@ -1103,6 +1150,7 @@ test_validate_translate()
 test_json_roundtrip()
 test_normalize_synthetic()
 test_find_gp()
+test_unit_free_gaps()
 test_exact_pass_synthetic()
 test_reference_propagation()
 test_gap_diff_synthetic()

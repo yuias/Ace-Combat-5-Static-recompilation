@@ -499,9 +499,48 @@ class CodeMatcher:
                         us0 = u.us + 4 * a
                         out.append(Range(us0, us0 + 4 * n, (u.jp + 4 * b) - us0,
                                          ".text", "diff", "medium"))
-        self._ranges = merge_ranges(out)
+        merged = merge_ranges(out)
+        self._ranges = merge_ranges(merged + self._unit_free_gaps(merged))
         self._range_starts = [r.us_start for r in self._ranges]
         return self._ranges
+
+    def _unit_free_gaps(self, rows: List[Range]) -> List[Range]:
+        """Code between two ranges that keep the same shift is present at that
+        shift when its words agree, even if no IDA unit covers it (SDK functions
+        IDA missed). Words that differ stay unmapped."""
+        un, jn = self.us.norm, self.jp.norm
+        out: List[Range] = []
+        n_gaps = n_bytes = 0
+        for a, b in zip(rows, rows[1:]):
+            lo, hi, d = a.us_end, b.us_start, a.delta
+            if lo >= hi or b.delta != d:
+                continue
+            n = (hi - lo) >> 2
+            i, j = self.us.index(lo), self.jp.index(lo + d)
+            if j < 0 or j + n > len(jn) or n > MAX_GAP_WORDS:
+                continue
+            ub, jb = un[i:i + n], jn[j:j + n]
+            if ub == jb:
+                raw = self.us.raw[i:i + n] == self.jp.raw[j:j + n]
+                out.append(Range(lo, hi, d, ".text", "gap", "high" if raw else "medium"))
+                n_gaps += 1
+                n_bytes += hi - lo
+                continue
+            # The window is bounded by the neighbours' JP spans, so blocks that
+            # drift off the shift cannot overlap them.
+            mapped = 0
+            for x, y, m in difflib.SequenceMatcher(None, ub, jb, autojunk=False) \
+                    .get_matching_blocks():
+                if m >= MIN_DIFF_BLOCK:
+                    us0 = lo + 4 * x
+                    out.append(Range(us0, us0 + 4 * m, d + 4 * (y - x),
+                                     ".text", "gap", "medium"))
+                    mapped += 4 * m
+            if mapped:
+                n_gaps += 1
+                n_bytes += mapped
+        self.stats["unit_free_gaps"], self.stats["unit_free_bytes"] = n_gaps, n_bytes
+        return out
 
     def _raw_equal(self, lo: int, hi: int, delta: int) -> bool:
         n = (hi - lo) >> 2
