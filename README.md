@@ -111,6 +111,8 @@ Still in the repo root:
 
 The window stays black for about 20 seconds before the first picture. That's normal, give it a moment. The log goes to stderr. In PowerShell 7 you can save it by sticking `2> ac5_log.txt` on the end. The older Windows PowerShell 5.1 mangles stderr when you redirect it like that, so if that's what you have, run the same command from `cmd` instead. `--verbose` makes it log a lot more (and it really is a lot).
 
+The other command-line flags and environment variables (sound output, saves, test modes) are listed in [docs/runtime-options.md](docs/runtime-options.md).
+
 You can start `ac5.exe` from outside the terminal too (double-clicking it in Explorer, say), but it still needs `--data` and `--disc`, so a shortcut with those arguments filled in is the easiest way.
 
 Where your stuff goes:
