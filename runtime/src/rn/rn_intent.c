@@ -2,6 +2,7 @@
 #include "ps2_hook.h"
 #include "ps2_gfxq.h"
 #include "ps2_capture.h"
+#include "ps2_addr.h"
 #include "rn_int.h"
 
 #include <stdio.h>
@@ -10,16 +11,19 @@
 
 int rn_intents_pending;
 
-#define F_PRIM_WRITER 0x0031FB88u
-#define F_RECT_HELPER 0x0031FF00u
-#define F_LINE_HELPER 0x0031FFB0u
+#define F_PRIM_WRITER PS2_A(RN_PRIM_WRITER)
+#define F_RECT_HELPER PS2_A(RN_RECT_HELPER)
+#define F_LINE_HELPER PS2_A(RN_LINE_HELPER)
 
-static const struct { u32 addr, size; u32 w[4]; } fn_writer = {
-    F_PRIM_WRITER, 0x378, { 0x30AEFFFFu, 0x00063400u, 0x31C20010u, 0x00E0782Du } };
-static const struct { u32 addr, size; u32 w[4]; } fn_rect = {
-    F_RECT_HELPER, 0xB0, { 0x27BDFFA0u, 0x3C020FFFu, 0x93AD0060u, 0x00A0602Du } };
-static const struct { u32 addr, size; u32 w[4]; } fn_line = {
-    F_LINE_HELPER, 0xA0, { 0x27BDFFA0u, 0x3C020FFFu, 0x93A30060u, 0x3442FFFFu } };
+/* The size comes from the list's _END entry, so a JP body of a different
+   length follows its region; the entry words are checked through
+   ps2_addr_code_matches(). */
+typedef struct { u32 addr, size; int aid; } known_fn;
+#define KNOWN_FN(n) { PS2_A(n), PS2_A(n##_END) - PS2_A(n), PS2_AID_##n }
+
+static const known_fn fn_writer = KNOWN_FN(RN_PRIM_WRITER);
+static const known_fn fn_rect = KNOWN_FN(RN_RECT_HELPER);
+static const known_fn fn_line = KNOWN_FN(RN_LINE_HELPER);
 
 #define PEND_MAX 8192u
 #define ARENA_BYTES (4u << 20)
@@ -206,40 +210,41 @@ static int tap_writer(ps2_ctx *ctx, void *u) {
     return 0;
 }
 
-typedef struct { u32 addr; u32 w0, w1; u16 flags; } group_writer;
+typedef struct { u32 addr; int aid; u16 flags; } group_writer;
+#define GROUP(n, fl) { PS2_A(n), PS2_AID_##n, fl }
 static const group_writer groups[] = {
-    { 0x002D6E00u, 0x27BDFF90u, 0x00A0482Du, 0 },
-    { 0x00134598u, 0x27BDFDE0u, 0x240300FFu, RN_G_WORLD },
-    { 0x00134EB0u, 0x27BDFEB0u, 0x3C014120u, RN_G_WORLD },
-    { 0x00141AC8u, 0x27BDFF20u, 0xFFB300A8u, 0 },
-    { 0x00141EC8u, 0x27BDFF40u, 0xFFB20080u, 0 },
-    { 0x00135378u, 0x27BDFF90u, 0xFFB40050u, 0 },
-    { 0x001354D0u, 0x27BDFF30u, 0xFFB500A8u, 0 },
-    { 0x00135928u, 0x27BDFEE0u, 0xFFB400F0u, 0 },
-    { 0x00135EC0u, 0x27BDFF40u, 0xFFB50098u, 0 },
-    { 0x0013E300u, 0x27BDFF80u, 0xFFB50068u, 0 },
-    { 0x00136330u, 0x27BDFF30u, 0x24030001u, 0 },
-    { 0x00136688u, 0x27BDFEB0u, 0x24030001u, 0 },
-    { 0x00136A68u, 0x27BDFF30u, 0x24030001u, 0 },
-    { 0x00136E88u, 0x27BDFF40u, 0x24020001u, RN_G_WORLD },
-    { 0x00137010u, 0x27BDFF20u, 0xFFB200A0u, RN_G_WORLD },
-    { 0x00137258u, 0x27BDFE40u, 0x24030001u, RN_G_WORLD },
-    { 0x00137C10u, 0x27BDFF80u, 0xFFB30028u, RN_G_WORLD },
-    { 0x00138A58u, 0x27BDFF20u, 0xFFB10098u, RN_G_WORLD },
-    { 0x0013E920u, 0x27BDFC30u, 0xFFB00350u, RN_G_WORLD },
-    { 0x0013FB70u, 0x27BDFF50u, 0xFFB10068u, 0 },
-    { 0x00140780u, 0x27BDFF10u, 0x24030003u, RN_G_WORLD },
-    { 0x0013F660u, 0x27BDFF30u, 0x24030013u, 0 },
-    { 0x0013F878u, 0x27BDFF60u, 0xFFB50078u, 0 },
-    { 0x00140A20u, 0x27BDFE10u, 0xFFB001A0u, 0 },
-    { 0x001410D0u, 0x27BDFEB0u, 0x3C030042u, RN_G_WORLD },
-    { 0x00141478u, 0x27BDFBB0u, 0xFFB103F8u, RN_G_WORLD },
-    { 0x00149298u, 0x27BDFD20u, 0xFFB00280u, RN_G_WORLD },
-    { 0x00139250u, 0x27BDFFC0u, 0xFFB00010u, 0 },
-    { 0x0013E6F8u, 0x27BDFF90u, 0x3C014900u, 0 },
-    { 0x0013DBD8u, 0x27BDFF60u, 0x0000382Du, 0 },
-    { 0x0013DE38u, 0x27BDFE90u, 0xFFB40120u, 0 },
-    { 0x00142A38u, 0x27BDFEB0u, 0xFFB300D8u, RN_G_WORLD },
+    GROUP(RN_GROUP_2D6E00, 0),
+    GROUP(RN_GROUP_134598, RN_G_WORLD),
+    GROUP(RN_GROUP_134EB0, RN_G_WORLD),
+    GROUP(RN_GROUP_141AC8, 0),
+    GROUP(RN_GROUP_141EC8, 0),
+    GROUP(RN_GROUP_135378, 0),
+    GROUP(RN_GROUP_1354D0, 0),
+    GROUP(RN_GROUP_135928, 0),
+    GROUP(RN_GROUP_135EC0, 0),
+    GROUP(RN_GROUP_13E300, 0),
+    GROUP(RN_GROUP_136330, 0),
+    GROUP(RN_GROUP_136688, 0),
+    GROUP(RN_GROUP_136A68, 0),
+    GROUP(RN_GROUP_136E88, RN_G_WORLD),
+    GROUP(RN_GROUP_137010, RN_G_WORLD),
+    GROUP(RN_GROUP_137258, RN_G_WORLD),
+    GROUP(RN_GROUP_137C10, RN_G_WORLD),
+    GROUP(RN_GROUP_138A58, RN_G_WORLD),
+    GROUP(RN_GROUP_13E920, RN_G_WORLD),
+    GROUP(RN_GROUP_13FB70, 0),
+    GROUP(RN_GROUP_140780, RN_G_WORLD),
+    GROUP(RN_GROUP_13F660, 0),
+    GROUP(RN_GROUP_13F878, 0),
+    GROUP(RN_GROUP_140A20, 0),
+    GROUP(RN_GROUP_1410D0, RN_G_WORLD),
+    GROUP(RN_GROUP_141478, RN_G_WORLD),
+    GROUP(RN_GROUP_149298, RN_G_WORLD),
+    GROUP(RN_GROUP_139250, 0),
+    GROUP(RN_GROUP_13E6F8, 0),
+    GROUP(RN_GROUP_13DBD8, 0),
+    GROUP(RN_GROUP_13DE38, 0),
+    GROUP(RN_GROUP_142A38, RN_G_WORLD),
 };
 #define N_GROUPS (sizeof groups / sizeof groups[0])
 
@@ -266,10 +271,8 @@ static int tap_group(ps2_ctx *ctx, void *u) {
     return 0;
 }
 
-#define F_SKY_DOME 0x00114F20u
-#define F_SKY_HAZE 0x00114A70u
-static const u32 sky_dome_w[2] = { 0x27BDFF90u, 0xFFB10018u };
-static const u32 sky_haze_w[2] = { 0x3C014580u, 0x27BDFF70u };
+#define F_SKY_DOME PS2_A(RN_SKY_DOME)
+#define F_SKY_HAZE PS2_A(RN_SKY_HAZE)
 
 static void record_sky(u32 dome, u32 pkt, u32 end, u32 site, rn_int_skydome *body) {
     rn_intent_hdr h;
@@ -282,7 +285,7 @@ static void record_sky(u32 dome, u32 pkt, u32 end, u32 site, rn_int_skydome *bod
     hdr_init(&h, RN_INT_SKYDOME, need, site, pkt);
     ps2_get_mem(body->screen, dome, sizeof body->screen);
     ps2_get_mem(body->clip, dome + 64u, sizeof body->clip);
-    ps2_get_mem(body->seg, 0x003C8370u, sizeof body->seg);
+    ps2_get_mem(body->seg, PS2_A(RN_SKY_SEGS), sizeof body->seg);
     body->rings = rings;
     body->segs = 32u;
     memcpy(out, &h, sizeof h);
@@ -353,10 +356,8 @@ static int tap_sky_haze(ps2_ctx *ctx, void *u) {
     return 0;
 }
 
-#define F_CLIP_TRI 0x001AF720u
-#define F_DRAW_FAN 0x001AFE80u
-static const u32 clip_tri_w[2] = { 0x27BDFFA0u, 0x3C02003Du };
-static const u32 draw_fan_w[2] = { 0x27BDFFA0u, 0x3C035000u };
+#define F_CLIP_TRI PS2_A(RN_CLIP_TRI)
+#define F_DRAW_FAN PS2_A(RN_DRAW_FAN)
 static rn_int_tri3d tri_in;
 static u32 tri_obj;
 static int tri_ok;
@@ -369,7 +370,7 @@ static int tap_clip_tri(ps2_ctx *ctx, void *u) {
     ps2_get_mem(tri_in.clip, obj + 64u, sizeof tri_in.clip);
     tri_in.prim = ps2_r32(obj + 128u);
     for (u32 i = 0; i < 3u; i++) {
-        u32 base = 0x003C8A00u + 64u * i;
+        u32 base = PS2_A(RN_SKY_RINGTAB) + 64u * i;
         ps2_get_mem(tri_in.colour + 4u * i, base, 16);
         ps2_get_mem(tri_in.uv + 4u * i, base + 16u, 16);
         ps2_get_mem(tri_in.pos + 4u * i, base + 32u, 16);
@@ -397,12 +398,10 @@ static int tap_draw_fan(ps2_ctx *ctx, void *u) {
     return 0;
 }
 
-#define F_CLOUD_PROJECT 0x001CF718u
-#define F_SPRITE_ROWS   0x001CD568u
-#define F_CLOUD_FIELD   0x001CFAF8u
+#define F_CLOUD_PROJECT PS2_A(RN_CLOUD_PROJECT)
+#define F_SPRITE_ROWS   PS2_A(RN_SPRITE_ROWS)
+#define F_CLOUD_FIELD   PS2_A(RN_CLOUD_FIELD)
 #define CLOUD_FIELD_SIZE 0xA58u
-static const u32 cloud_project_w[2] = { 0xD8890000u, 0x4BC14B2Cu };
-static const u32 sprite_rows_w[2] = { 0x00A0782Du, 0x00C0702Du };
 
 #define CLOUD_MAX 512u
 static struct {
@@ -473,10 +472,8 @@ static int tap_sprite_rows(ps2_ctx *ctx, void *u) {
     return 0;
 }
 
-#define F_CLOUD_PLANES  0x001D1D88u
-#define F_CLOUD_VERTEX  0x001D0D30u
-static const u32 cloud_planes_w[2] = { 0x27BDFF00u, 0xFFB00080u };
-static const u32 cloud_vertex_w[2] = { 0xD8E80000u, 0x4BE821BCu };
+#define F_CLOUD_PLANES  PS2_A(RN_CLOUD_PLANES)
+#define F_CLOUD_VERTEX  PS2_A(RN_CLOUD_VERTEX)
 
 #define PLOG_MAX 4096u
 static struct { u64 xyz; float pos[4]; } plog[PLOG_MAX];
@@ -592,12 +589,6 @@ static int tap_cloud_planes(ps2_ctx *ctx, void *u) {
     return 0;
 }
 
-static int code_matches(u32 addr, const u32 *w) {
-    for (int i = 0; i < 4; i++)
-        if (ps2_r32(addr + 4u * (u32)i) != w[i]) return 0;
-    return 1;
-}
-
 void rn_intent_init(void) {
     const char *e = getenv("PS2_RN_INTENTS");
     if (e && *e == '0') {
@@ -605,9 +596,9 @@ void rn_intent_init(void) {
         return;
     }
     if (!rn_taps_on) return;
-    if (!code_matches(fn_writer.addr, fn_writer.w)
-        || !code_matches(fn_rect.addr, fn_rect.w)
-        || !code_matches(fn_line.addr, fn_line.w)) {
+    if (!ps2_addr_code_matches(fn_writer.aid)
+        || !ps2_addr_code_matches(fn_rect.aid)
+        || !ps2_addr_code_matches(fn_line.aid)) {
         ps2_log("rn: the primitive writer at %08X is not the one the intents "
                 "expect; no render intents", F_PRIM_WRITER);
         return;
@@ -628,8 +619,7 @@ void rn_intent_init(void) {
         return;
     }
     for (uintptr_t i = 0; i < N_GROUPS; i++) {
-        if (ps2_r32(groups[i].addr) != groups[i].w0
-            || ps2_r32(groups[i].addr + 4u) != groups[i].w1) {
+        if (!ps2_addr_code_matches(groups[i].aid)) {
             ps2_log("rn: 2D group writer %08X does not match; not claimed",
                     groups[i].addr);
             continue;
@@ -640,8 +630,7 @@ void rn_intent_init(void) {
                               "rn-intents") < 0)
             ps2_log("rn: the hook layer refused 2D group writer %08X", groups[i].addr);
     }
-    if (ps2_r32(F_SKY_DOME) == sky_dome_w[0] && ps2_r32(F_SKY_DOME + 4u) == sky_dome_w[1]
-        && ps2_r32(F_SKY_HAZE) == sky_haze_w[0] && ps2_r32(F_SKY_HAZE + 8u) == sky_haze_w[1]) {
+    if (ps2_addr_code_matches(PS2_AID_RN_SKY_DOME) && ps2_addr_code_matches(PS2_AID_RN_SKY_HAZE)) {
         if (ps2_hook_after(F_SKY_DOME, tap_sky_dome, NULL, 100, "rn-intents") < 0
             || ps2_hook_before(F_SKY_HAZE, tap_sky_haze_enter, NULL, 100, "rn-intents") < 0
             || ps2_hook_after(F_SKY_HAZE, tap_sky_haze, NULL, 100, "rn-intents") < 0)
@@ -650,8 +639,7 @@ void rn_intent_init(void) {
         ps2_log("rn: the sky writers %08X / %08X do not match; not recorded",
                 F_SKY_DOME, F_SKY_HAZE);
     }
-    if (ps2_r32(F_CLIP_TRI) == clip_tri_w[0] && ps2_r32(F_CLIP_TRI + 4u) == clip_tri_w[1]
-        && ps2_r32(F_DRAW_FAN) == draw_fan_w[0] && ps2_r32(F_DRAW_FAN + 4u) == draw_fan_w[1]) {
+    if (ps2_addr_code_matches(PS2_AID_RN_CLIP_TRI) && ps2_addr_code_matches(PS2_AID_RN_DRAW_FAN)) {
         if (ps2_hook_before(F_CLIP_TRI, tap_clip_tri, NULL, 100, "rn-intents") < 0
             || ps2_hook_after(F_DRAW_FAN, tap_draw_fan, NULL, 100, "rn-intents") < 0)
             ps2_log("rn: the hook layer refused the clip-and-draw taps");
@@ -659,10 +647,8 @@ void rn_intent_init(void) {
         ps2_log("rn: the clip-and-draw helpers %08X / %08X do not match; not recorded",
                 F_CLIP_TRI, F_DRAW_FAN);
     }
-    if (ps2_r32(F_CLOUD_PROJECT) == cloud_project_w[0]
-        && ps2_r32(F_CLOUD_PROJECT + 4u) == cloud_project_w[1]
-        && ps2_r32(F_SPRITE_ROWS) == sprite_rows_w[0]
-        && ps2_r32(F_SPRITE_ROWS + 4u) == sprite_rows_w[1]) {
+    if (ps2_addr_code_matches(PS2_AID_RN_CLOUD_PROJECT)
+        && ps2_addr_code_matches(PS2_AID_RN_SPRITE_ROWS)) {
         if (ps2_hook_before(F_CLOUD_PROJECT, tap_cloud_project_enter, NULL, 100, "rn-intents") < 0
             || ps2_hook_after(F_CLOUD_PROJECT, tap_cloud_project, NULL, 100, "rn-intents") < 0
             || ps2_hook_before(F_SPRITE_ROWS, tap_sprite_rows_enter, NULL, 100, "rn-intents") < 0
@@ -672,10 +658,8 @@ void rn_intent_init(void) {
         ps2_log("rn: the cloud writers %08X / %08X do not match; not recorded",
                 F_CLOUD_PROJECT, F_SPRITE_ROWS);
     }
-    if (ps2_r32(F_CLOUD_PLANES) == cloud_planes_w[0]
-        && ps2_r32(F_CLOUD_PLANES + 4u) == cloud_planes_w[1]
-        && ps2_r32(F_CLOUD_VERTEX) == cloud_vertex_w[0]
-        && ps2_r32(F_CLOUD_VERTEX + 4u) == cloud_vertex_w[1]) {
+    if (ps2_addr_code_matches(PS2_AID_RN_CLOUD_PLANES)
+        && ps2_addr_code_matches(PS2_AID_RN_CLOUD_VERTEX)) {
         if (ps2_hook_before(F_CLOUD_PLANES, tap_cloud_planes_enter, NULL, 100, "rn-intents") < 0
             || ps2_hook_after(F_CLOUD_PLANES, tap_cloud_planes, NULL, 100, "rn-intents") < 0
             || ps2_hook_before(F_CLOUD_VERTEX, tap_cloud_vertex_enter, NULL, 100, "rn-intents") < 0
