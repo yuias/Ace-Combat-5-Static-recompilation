@@ -1,14 +1,17 @@
 """Handler for ida_db.json: meta, segments, functions and names."""
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import regions
+from ps2recomp.r5900 import decode
 
 from .core import Translator, dump_json
 
 FILE = "ida_db.json"
 _LOAD = "LOAD"
+_BOUND_WINDOW = 16  # instructions scanned before a jr for its range check
+_RA = 31
 
 
 def _hex(v: Optional[int]) -> str:
@@ -145,6 +148,161 @@ def _names(tr: Translator, names: Dict[str, str]) -> Dict[str, str]:
     return out
 
 
+class SwitchError(Exception):
+    """A switch that cannot be translated safely; the text names the step."""
+
+
+Words = Callable[[int], int]
+
+
+def find_bound(word: Words, jr_ea: int) -> Optional[int]:
+    """Immediate of the nearest SLTIU before a jr: the range check that
+    guards the table."""
+    for k in range(1, _BOUND_WINDOW + 1):
+        a = jr_ea - 4 * k
+        insn = decode(word(a), a)
+        if insn.name == "SLTIU":
+            return insn.imm
+    return None
+
+
+def read_table(word: Words, base: int, n: int, elbase: int) -> List[int]:
+    return [(word(base + 4 * i) + elbase) & 0xFFFFFFFF for i in range(n)]
+
+
+def self_check(us_word: Words, s: dict) -> Tuple[bool, bool]:
+    """(table_ok, bound_ok): whether the recorded targets are exactly the US
+    table, and whether the SLTIU bound before the jr equals ncases."""
+    table = read_table(us_word, s["jumps"], s["ncases"], s["elbase"])
+    return (set(table) == set(s["targets"]),
+            find_bound(us_word, s["ea"]) == s["ncases"])
+
+
+def _is_jump_reg(word: Words, ea: int) -> bool:
+    insn = decode(word(ea), ea)
+    return insn.name == "JR" and insn.rs != _RA
+
+
+def _inside(addr: int, spans: Sequence[Tuple[int, int]]) -> bool:
+    return any(lo <= addr < hi for lo, hi in spans)
+
+
+def jp_targets(mapped: List[Optional[int]], entries: List[int],
+               in_text: Callable[[int], bool], spans: Sequence[Tuple[int, int]],
+               check_spans: bool) -> Tuple[List[int], bool]:
+    """Validate the JP table entries against the translated US targets and
+    pick the target list. Returns (targets, rederived)."""
+    for e in entries:
+        if e & 3 or not in_text(e):
+            raise SwitchError("step 3: JP table entry 0x%08X is not in .text" % e)
+        if check_spans and not _inside(e, spans):
+            raise SwitchError("step 3: JP table entry 0x%08X is outside the function" % e)
+    have = set(entries)
+    need = {m for m in mapped if m is not None}
+    lost = sorted(need - have)
+    if lost:
+        raise SwitchError("step 3: translated US target 0x%08X is missing from the JP table"
+                          % lost[0])
+    if None not in mapped and have == need:
+        return list(mapped), False  # type: ignore[arg-type]
+    return list(dict.fromkeys(entries)), True
+
+
+def translate_switch(tr: Translator, s: dict, us_word: Words, jp_word: Words,
+                     in_text: Callable[[int], bool]) -> Tuple[dict, bool, List[str]]:
+    """Translate one switch. Returns (switch, rederived, notes) or raises
+    SwitchError. Only the word readers touch the binaries, so tests can use
+    dict-backed fakes."""
+    ea, translate = s["ea"], tr.rmap.translate
+    table_ok, bound_ok = self_check(us_word, s)
+
+    jp_ea = translate(ea)
+    if jp_ea is None:
+        raise SwitchError("step 2: ea is unmapped (%s); jr pairing is not implemented"
+                          % tr.why(ea))
+    if not _is_jump_reg(jp_word, jp_ea):
+        raise SwitchError("step 2: 0x%08X is not a jr" % jp_ea)
+    jp_func = tr.func_entry(s["func"])
+    if jp_func is None:
+        raise SwitchError("step 6: function 0x%08X is unmapped (%s)"
+                          % (s["func"], tr.why(s["func"])))
+    jp_jumps = translate(s["jumps"])
+    if jp_jumps is None:
+        raise SwitchError("step 3: table address is unmapped (%s); lui decode is not implemented"
+                          % tr.why(s["jumps"]))
+    elbase = s["elbase"]
+    jp_elbase = elbase if elbase == 0 else translate(elbase)
+    if jp_elbase is None:
+        raise SwitchError("step 3: elbase is unmapped")
+
+    mapped = [translate(t) for t in s["targets"]]
+    rederived, n_jp = False, s["ncases"]
+    if not table_ok:
+        # The recorded targets are all we know, so every one must carry over.
+        for t, m in zip(s["targets"], mapped):
+            if m is None:
+                raise SwitchError("step 4: target 0x%08X is unmapped (%s)" % (t, tr.why(t)))
+        targets: List[int] = list(mapped)  # type: ignore[arg-type]
+    else:
+        if bound_ok:
+            n_jp = find_bound(jp_word, jp_ea)
+            if n_jp is None:
+                raise SwitchError("step 3: no SLTIU bound before the JP jr")
+        entries = read_table(jp_word, jp_jumps, n_jp, jp_elbase)
+        fm = tr.rmap.function_at(s["func"])
+        us_chunks = [] if fm is None else [(fm.us, fm.us_end)] + [(c[0], c[1]) for c in fm.chunks]
+        # Targets outside the function (tail jumps) make the span test meaningless.
+        check_spans = fm is not None and all(_inside(t, us_chunks) for t in s["targets"])
+        targets, rederived = jp_targets(mapped, entries, in_text, tr.jp_spans(s["func"]),
+                                        check_spans)
+
+    notes: List[str] = []
+    jp_start = translate(s["startea"])
+    if jp_start is None:
+        jp_start = jp_ea
+        notes.append("startea 0x%08X is unmapped; using the jr" % s["startea"])
+    new = dict(s)
+    new.update(ea=jp_ea, func=jp_func, jumps=jp_jumps, elbase=jp_elbase, startea=jp_start,
+               ncases=n_jp, targets=targets)
+    return new, rederived, notes
+
+
+def _switches(tr: Translator, switches: List[dict]) -> List[dict]:
+    us_word, jp_word = tr.us_elf.word, tr.jp_elf.word
+    ranges = tr.jp_elf.text_ranges()
+    in_text = lambda a: _inside(a, ranges)
+    checks = [self_check(us_word, s) for s in switches]
+    n_kept = n_re = n_fail = 0
+    out: List[dict] = []
+    owner: Dict[int, int] = {}
+    for s in switches:
+        where = "switches[ea=0x%08X]" % s["ea"]
+        try:
+            new, rederived, notes = translate_switch(tr, s, us_word, jp_word, in_text)
+            if new["ea"] in owner:
+                raise SwitchError("step 2: maps onto 0x%08X, already taken by 0x%08X"
+                                  % (new["ea"], owner[new["ea"]]))
+        except SwitchError as e:
+            tr.fail(FILE, where, s["ea"], str(e))
+            n_fail += 1
+            continue
+        owner[new["ea"]] = s["ea"]
+        for text in notes:
+            tr.note(FILE, where, s["ea"], new["ea"], text)
+        if rederived:
+            tr.rederive(FILE, where, s["ea"], new["ea"], "jump table")
+            n_re += 1
+        else:
+            tr.kept(FILE)
+            n_kept += 1
+        out.append(new)
+    print("switches: %d total, table_ok %d, table_bad %d, bound_ok %d, bound_bad %d"
+          % (len(switches), sum(t for t, _ in checks), sum(not t for t, _ in checks),
+             sum(b for _, b in checks), sum(not b for _, b in checks)))
+    print("switches: kept %d, rederived %d, failed %d" % (n_kept, n_re, n_fail))
+    return out
+
+
 def handle(tr: Translator, src_dir: str, switches: bool = True) -> Dict[str, bytes]:
     raw = _read(src_dir)
     db = json.loads(raw)
@@ -159,10 +317,8 @@ def handle(tr: Translator, src_dir: str, switches: bool = True) -> Dict[str, byt
         "meta": meta,
         "segments": segments,
         "functions": _functions(tr, db["functions"]),
-        "switches": [],
+        "switches": _switches(tr, db["switches"]) if switches else [],
         "names": _names(tr, db["names"]),
     }
     out = {k: parts[k] for k in db}  # keep the US key order
-    if switches:
-        tr.fail(FILE, "switches", None, "switch translation not implemented")
     return {FILE: dump_json(out, None, raw)}

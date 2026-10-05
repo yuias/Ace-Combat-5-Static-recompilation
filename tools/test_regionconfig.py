@@ -3,7 +3,6 @@ import os
 import shutil
 import sys
 import tempfile
-from functools import partial
 from types import SimpleNamespace
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
@@ -22,9 +21,8 @@ US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
 JP = os.path.join(ROOT, "tmp", "jp", "SLPS_254.18")
 CONFIG = os.path.join(ROOT, "config")
 
-# The CLI list fails on purpose while ida_db switches are untranslated.
+# The synthetic tests have no ida_db.json source or ELF, so they skip that handler.
 SYMBOL_HANDLERS = [h for h in HANDLERS if h is not idadb.handle]
-NO_SWITCH_HANDLERS = SYMBOL_HANDLERS + [partial(idadb.handle, switches=False)]
 
 SYMBOL_FILES = ("hooks.json", "overrides.json", "manual_symbols.json",
                 "sdk_symbols.json", "game_symbols.txt")
@@ -410,13 +408,124 @@ def test_ida_functions_and_names():
         tr = Translator(rmap2, us, jp)
         idadb.handle(tr, root, switches=False)
         assert [e.where for e in tr.failures] == ["functions[ea=0x00000140]"]
-
-        # The CLI path fails on purpose until switches are translated.
-        tr = Translator(synthetic_map(), us, jp)
-        idadb.handle(tr, root)
-        assert [(e.file, e.where, e.us) for e in tr.failures] == [("ida_db.json", "switches", None)]
     finally:
         shutil.rmtree(root)
+
+
+JR_V0 = 0x00400008
+JR_RA = 0x03E00008
+
+
+def sltiu(imm):
+    return (0x0B << 26) | (2 << 21) | (2 << 16) | imm
+
+
+def switch_fixture(us_extra=None, jp_extra=None, **over):
+    """A switch in sub_140 (US 0x140.., chunk 0x1C0..) that maps by delta
+    0x10 / 0x20. US: bound 3 at 0x164, jr at 0x16C, table at 0x330. JP: jr at
+    0x17C, table at 0x350."""
+    s = {"ea": 0x16C, "func": 0x140, "jumps": 0x330, "ncases": 3, "elbase": 0,
+         "startea": 0x160, "targets": [0x144, 0x148, 0x1C4]}
+    s.update(over)
+    us = {0x164: sltiu(3), 0x16C: JR_V0}
+    jp = {0x174: sltiu(3), 0x17C: JR_V0}
+    for i, t in enumerate([0x144, 0x148, 0x1C4]):
+        us[0x330 + 4 * i] = t
+    for i, t in enumerate([0x154, 0x158, 0x1D4]):
+        jp[0x350 + 4 * i] = t
+    us.update(us_extra or {})
+    jp.update(jp_extra or {})
+    return s, us, jp
+
+
+def run_switch(s, us, jp, rmap=None):
+    tr = Translator(rmap or synthetic_map(), None, None)
+    return idadb.translate_switch(tr, s, lambda a: us.get(a, 0), lambda a: jp.get(a, 0),
+                                  lambda a: 0x110 <= a < 0x420)
+
+
+def switch_fails(s, us, jp, text):
+    try:
+        run_switch(s, us, jp)
+    except idadb.SwitchError as e:
+        assert text in str(e), str(e)
+        return
+    raise AssertionError("expected a SwitchError containing %r" % text)
+
+
+def test_switch_logic():
+    # The table equals the translated US targets: the US list carries over.
+    s, us, jp = switch_fixture()
+    assert idadb.self_check(lambda a: us.get(a, 0), s) == (True, True)
+    new, re, notes = run_switch(s, us, jp)
+    assert not re and not notes
+    assert (new["ea"], new["func"], new["jumps"], new["startea"], new["ncases"]) == \
+        (0x17C, 0x150, 0x350, 0x170, 3)
+    assert new["targets"] == [0x154, 0x158, 0x1D4]
+    assert s["targets"] == [0x144, 0x148, 0x1C4], "the input is not modified"
+
+    # Duplicates and order of the US list are kept when the sets agree.
+    s2, us2, jp2 = switch_fixture(targets=[0x148, 0x144, 0x1C4], ncases=4,
+                                  us_extra={0x164: sltiu(4), 0x33C: 0x148},
+                                  jp_extra={0x174: sltiu(4), 0x35C: 0x158})
+    new, re, _ = run_switch(s2, us2, jp2)
+    assert not re and new["targets"] == [0x158, 0x154, 0x1D4] and new["ncases"] == 4
+
+    # One extra case in the JP table: the bound grows and the entries win.
+    s, us, jp = switch_fixture(jp_extra={0x174: sltiu(4), 0x35C: 0x15C})
+    new, re, _ = run_switch(s, us, jp)
+    assert re and new["ncases"] == 4 and new["targets"] == [0x154, 0x158, 0x1D4, 0x15C]
+
+    # Without a matching US bound the US case count is used, not the JP bound.
+    s, us, jp = switch_fixture(us_extra={0x164: sltiu(9)}, jp_extra={0x174: sltiu(4),
+                                                                     0x35C: 0x15C})
+    assert idadb.self_check(lambda a: us.get(a, 0), s) == (True, False)
+    new, re, _ = run_switch(s, us, jp)
+    assert not re and new["ncases"] == 3
+
+    # An entry outside the function (or outside .text, or unaligned) fails.
+    switch_fails(*switch_fixture(jp_extra={0x358: 0x1A0}), "outside the function")
+    switch_fails(*switch_fixture(jp_extra={0x358: 0x9000}), "not in .text")
+    switch_fails(*switch_fixture(jp_extra={0x358: 0x1D5}), "not in .text")
+    # A mapped US target that the JP table lost fails.
+    switch_fails(*switch_fixture(jp_extra={0x358: 0x154}), "missing from the JP table")
+    # The span test is off when a US target leaves the function: only .text applies.
+    s, us, jp = switch_fixture(targets=[0x144, 0x148, 0x210],
+                               us_extra={0x338: 0x210}, jp_extra={0x358: 0x300})
+    new, re, _ = run_switch(s, us, jp)
+    assert re and new["targets"] == [0x154, 0x158, 0x300], "unmapped US target: rederived"
+    # ... and the JP entries stay checked against .text.
+    switch_fails(s, us, switch_fixture(jp_extra={0x358: 0x500})[2], "not in .text")
+
+    # No SLTIU before the JP jr although the US bound held.
+    switch_fails(*switch_fixture(jp_extra={0x174: 0}), "no SLTIU bound")
+    # The JP address is not a jr, or is a return.
+    switch_fails(*switch_fixture(jp_extra={0x17C: 0}), "not a jr")
+    switch_fails(*switch_fixture(jp_extra={0x17C: JR_RA}), "not a jr")
+    # Unmapped ea / table address (the fallbacks are not implemented).
+    switch_fails(*switch_fixture(ea=0x210), "step 2")
+    switch_fails(*switch_fixture(jumps=0x210), "table address is unmapped")
+    switch_fails(*switch_fixture(func=0x50), "step 6")
+
+    # A table that disagrees with the US targets: plain translation.
+    s, us, jp = switch_fixture(us_extra={0x338: 0x14C})
+    assert idadb.self_check(lambda a: us.get(a, 0), s) == (False, True)
+    new, re, _ = run_switch(s, us, jp)
+    assert not re and new["targets"] == [0x154, 0x158, 0x1D4] and new["ncases"] == 3
+    s, us, jp = switch_fixture(us_extra={0x338: 0x14C}, targets=[0x144, 0x148, 0x210])
+    switch_fails(s, us, jp, "step 4")
+
+    # startea outside the map: the new jr stands in for it, with a note.
+    s, us, jp = switch_fixture(startea=0x210)
+    new, re, notes = run_switch(s, us, jp)
+    assert new["startea"] == 0x17C and len(notes) == 1
+
+    # elbase is translated; 0 stays 0.
+    s, us, jp = switch_fixture(elbase=0x100, us_extra={0x330: 0x44, 0x334: 0x48, 0x338: 0xC4},
+                               jp_extra={0x350: 0x44, 0x354: 0x48, 0x358: 0xC4})
+    new, re, _ = run_switch(s, us, jp)
+    assert not re and new["elbase"] == 0x110 and new["targets"] == [0x154, 0x158, 0x1D4]
+    assert idadb.read_table(lambda a: 0xFFFFFFF0, 0, 1, 0x20) == [0x10], "wraps at 32 bits"
 
 
 def test_real_ida_identity():
@@ -439,6 +548,12 @@ def test_real_ida_identity():
     assert raw.endswith(b"\n") == src.endswith(b"\n")
     assert b"\n" not in raw.rstrip(b"\n"), "one line, like the US file"
 
+    # With switches, the identity map reproduces every record unchanged.
+    tr = Translator(rmap, us, us)
+    full = json.loads(idadb.handle(tr, CONFIG)[idadb.FILE])
+    assert not tr.failures and not tr.rederived, (tr.failures[:3], tr.rederived[:3])
+    assert full["switches"] == a["switches"]
+
 
 def test_real_pair():
     from regionconfig.__main__ import main
@@ -452,18 +567,10 @@ def test_real_pair():
         verify_inputs(rmap, us, jp)
         out = os.path.join(root, "out")
 
-        # The CLI list fails once, on the switch placeholder, and writes nothing.
         log = []
-        assert run_translate(Translator(rmap, us, jp), HANDLERS, CONFIG, out, log.append) == 1
-        fails = [l for l in log if l.startswith("FAIL")]
-        assert len(fails) == 1 and fails[0].startswith("FAIL ida_db.json switches us=none"), log
-        assert not os.path.exists(out)
-        assert main(["translate", "--out", out]) == 1 and not os.path.exists(out)
-
-        assert run_translate(Translator(rmap, us, jp), NO_SWITCH_HANDLERS, CONFIG, out,
-                             [].append) == 0
-        assert run_check(Translator(rmap, us, jp), NO_SWITCH_HANDLERS, CONFIG, out,
-                         [].append) == 0
+        assert run_translate(Translator(rmap, us, jp), HANDLERS, CONFIG, out, log.append) == 0, log
+        assert run_check(Translator(rmap, us, jp), HANDLERS, CONFIG, out, log.append) == 0, log
+        assert main(["check", "--out", out]) == 0
         man = json.load(open(os.path.join(out, "manifest.json")))
         assert man["files"]["hooks.json"] == {"kept": 9, "dropped": 0, "rederived": 0}
         assert man["files"]["manual_symbols.json"] == {"kept": 10, "dropped": 0, "rederived": 0}
@@ -483,6 +590,11 @@ def test_real_pair():
         for f in rmap.functions:
             if f.us in (0x29A798, 0x2A78A0, 0x2F7490):
                 assert f.jp in by_ea and by_ea[f.jp]["chunks"] == [[f.jp, f.jp_end]], hex(f.us)
+        # Every switch survives and its JP table holds exactly the JP targets.
+        assert len(jp_db["switches"]) == len(us_db["switches"])
+        for sw in jp_db["switches"]:
+            table = {jp.word(sw["jumps"] + 4 * i) + sw["elbase"] for i in range(sw["ncases"])}
+            assert table == set(sw["targets"]), hex(sw["ea"])
         n_seg = len(jp_db["segments"])
         gaps = [d for d in man["dropped"] if d["where"].startswith("segments[")]
         assert n_seg + len(gaps) == len(us_db["segments"])
@@ -505,6 +617,7 @@ test_duplicates_and_order()
 test_verify_inputs()
 test_ida_segments()
 test_ida_functions_and_names()
+test_switch_logic()
 
 if os.path.isfile(US):
     test_real_identity()
