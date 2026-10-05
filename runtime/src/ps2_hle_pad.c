@@ -239,6 +239,11 @@ void hle_scePad2GetState(ps2_ctx *ctx) {
 static int pad_autoplay;
 void ps2_pad_autoplay(int on) { pad_autoplay = on; }
 
+/* Scene major 1 is the mission, where START opens the pause menu. */
+#define PAD_SCENE_MISSION 1u
+static volatile unsigned pad_scene_major = ~0u;
+void ps2_pad_scene(unsigned major) { pad_scene_major = major; }
+
 #define PAD_SCRIPT_MAX 32
 static struct { u64 field; u16 mask; } pad_script[PAD_SCRIPT_MAX];
 static unsigned pad_script_n;
@@ -300,7 +305,9 @@ static u16 pad_buttons(int port, const ps2_pad_state *st) {
     if (pad_autoplay && port == 0 && pad_reads > 240) {
         u64 phase = pad_reads % 150;
         if (phase < 6)       buttons |= 1u << PAD_CROSS;
-        else if (phase < 12) buttons |= 1u << PAD_START;
+        else if (phase < 12) {
+            if (pad_scene_major != PAD_SCENE_MISSION) buttons |= 1u << PAD_START;
+        }
         else if (phase < 18) buttons |= 1u << PAD_CIRCLE;
     }
     return buttons;

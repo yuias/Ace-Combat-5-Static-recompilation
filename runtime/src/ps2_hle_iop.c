@@ -804,6 +804,7 @@ void hook_scene(ps2_ctx *ctx) {
                 (unsigned long long)ps2_kernel_vblank_count(), major, minor, fn);
     }
     ps2_stop_scene_check(major, minor);
+    ps2_pad_scene(major);
     if (ps2_verbose) {
         char w[16];
         snprintf(w, sizeof w, "%u.%u", major, minor);

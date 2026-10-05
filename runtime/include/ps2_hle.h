@@ -61,6 +61,7 @@ void ps2_pad_init(void);
 void ps2_pad_report(void);
 void ps2_pad_io_report(void);
 void ps2_pad_autoplay(int on);
+void ps2_pad_scene(unsigned major);
 void ps2_gs_deinterlace(int off);
 void ps2_cdvd_rpc_register(void);
 void ps2_iop_services_register(void);
