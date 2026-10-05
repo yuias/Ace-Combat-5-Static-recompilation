@@ -12,6 +12,7 @@ from ps2recomp.elf import ElfFile
 
 from .codematch import CodeMatcher, load_units
 from .common import file_info, image_bounds, pair_sections
+from .datamap import collect_evidence, map_progbits
 from .mapfile import Range, RegionMap, Uncertain
 from .normalize import find_gp, hi_range_for, text_stream
 
@@ -98,8 +99,29 @@ def cmd_build(args, log=print):
     ranges.sort(key=lambda r: r.us_start)
     uncertain = [u for u in uncertain if u.section != ".text"]
 
+    # Content walk replaces the placeholder of every PROGBITS data section;
+    # NOBITS sections keep theirs.
+    t1 = time.time()
+    bounds = image_bounds(us, jp)
+    walked = {p.name for p in pairs if not p.nobits and p.name != ".text"}
+    ranges = [r for r in ranges if r.section not in walked]
+    uncertain = [u for u in uncertain if u.section not in walked]
+    data_stats = {}
+    for p in pairs:
+        if p.name in walked:
+            r, u, st = map_progbits(us, jp, p, cm.code_translate, bounds, log=log)
+            ranges += r
+            uncertain += u
+            data_stats[p.name] = st
+    ranges.sort(key=lambda r: r.us_start)
+    uncertain.sort(key=lambda u: u.us_start)
+    log("data: %.1f s" % (time.time() - t1))
+    evidence = collect_evidence(cm, pairs)
+    log("xref evidence: %d sites, %d distinct pairs"
+        % (sum(evidence.values()), len(evidence)))
+
     rmap = RegionMap(us_info, jp_info, [_section_dict(p) for p in pairs],
-                     ranges, uncertain, funcs, {"code": cm.stats})
+                     ranges, uncertain, funcs, {"code": cm.stats, "data": data_stats})
     rmap.validate()
     path = os.path.join(args.out, "regionmap.json")
     rmap.save(path)

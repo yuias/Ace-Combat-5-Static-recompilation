@@ -14,6 +14,7 @@ sys.path.insert(0, TOOLS)
 from ps2recomp.elf import ElfFile
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
 from regionmap.codematch import CodeMatcher, Unit, _clear, load_units
+from regionmap.datamap import make_same_word, walk_words
 from regionmap.mapfile import merge_ranges
 from regionmap.common import image_bounds
 from regionmap.common import words as read_words
@@ -538,6 +539,95 @@ def test_load_units():
         shutil.rmtree(d)
 
 
+def walk(us_words, jp_words, translate=lambda a: None):
+    same = make_same_word(translate, (0x100000, 0x500000))
+    return walk_words(us_words, jp_words, 0x400000, 0x400380, ".data", same, (0x100000, 0x500000))
+
+
+def spans(rows):
+    return [(r.us_start - 0x400000, r.us_end - 0x400000, r.delta) for r in rows]
+
+
+def test_data_walk():
+    seq = lambda base, n: [base + k for k in range(n)]    # distinct, not pointer-like
+    a, b = seq(0x1000, 24), seq(0x2000, 24)
+
+    # (a) A changed word of the same length keeps one range.
+    jp = list(a + b)
+    jp[7] = 0xDEAD
+    r, u, st = walk(a + b, jp)
+    assert spans(r) == [(0, 192, 0x380)] and not u and st["inplace_words"] == 1, (r, u, st)
+    assert all(x.source == "content" and x.confidence == "high" for x in r)
+
+    # (b) A string that grows by 8 bytes splits the walk once.
+    s_us = [0x41414141, 0x42424242, 0x43434343, 0x44444444]
+    s_jp = [0x41414141, 0x45454545, 0x46464646, 0x42424242, 0x43434343, 0x44444444]
+    r, u, st = walk(a + s_us + b, a + s_jp + b)
+    assert spans(r) == [(0, 100, 0x380), (100, 4 * 52, 0x388)] and not u, (spans(r), u)
+    # With a rewritten word in front of the shift, one small region is uncertain.
+    s_jp2 = [0x41414141, 0x45454545, 0x46464646, 0x47474747, 0x43434343, 0x44444444]
+    r, u, st = walk(a + s_us + b, a + s_jp2 + b)
+    assert [x.delta for x in r] == [0x380, 0x388], spans(r)
+    assert len(u) == 1 and u[0].reason == "content differs", u
+    assert (u[0].us_start, u[0].us_end) == (0x400000 + 100, 0x400000 + 104), u
+    assert u[0].candidates == [0x380, 0x388]
+
+    # (c) A zero run matches at every shift and must not vouch for one: the
+    # new delta starts only where non-zero words agree again.
+    us_w = a + [0] * 40 + b
+    jp_w = a[:-1] + [0xBEEF] + [0] * 44 + b
+    r, u, st = walk(us_w, jp_w)
+    assert [x.delta for x in r] == [0x380, 0x390], spans(r)
+    assert r[1].us_start == 0x400000 + 4 * (24 + 40), spans(r)
+    assert len(u) == 1 and u[0].us_start == 0x400000 + 4 * 23 and u[0].us_end == r[1].us_start
+    assert u[0].candidates == [0x380, 0x390]
+    # An all-zero tail cannot be placed at all.
+    r, u, st = walk([5] * 16 + [0] * 20, [6] * 16 + [0] * 20)
+    assert not r or all(x.us_start >= 0x400000 + 4 * 16 for x in r), spans(r)
+
+    # (d) Pointers: a code pointer outside the code map only has to stay near;
+    # one the code map translates must land exactly.
+    near = walk(seq(0x1000, 10) + [0x200000] + seq(0x3000, 10),
+                seq(0x1000, 10) + [0x200010] + seq(0x3000, 10))
+    assert spans(near[0]) == [(0, 84, 0x380)] and not near[1], near
+    tr = lambda a: a + 0x340 if 0x200000 <= a < 0x200100 else None
+    ok = walk(seq(0x1000, 10) + [0x200000] + seq(0x3000, 10),
+              seq(0x1000, 10) + [0x200340] + seq(0x3000, 10), tr)
+    assert spans(ok[0]) == [(0, 84, 0x380)] and ok[2]["inplace_words"] == 0, ok
+    same = make_same_word(tr, (0x100000, 0x500000))
+    assert same(0x200000, 0x200340) and not same(0x200000, 0x200350)
+    assert not same(0x1000, 0x1004)        # values outside the image never get slack
+    assert same(0x300000, 0x300380)
+
+    # Dense in-place edits (one changed field per record) must not resync at a
+    # shift of whole records.
+    rec = lambda k, tag: [tag + k, 0xFF01, 0, 0x1000 + k, 0]
+    us_t = sum((rec(k, 0x20) for k in range(20)), [])
+    jp_t = sum((rec(k, 0x30) for k in range(20)), [])
+    r, u, st = walk(us_t + b, jp_t + b)
+    assert spans(r) == [(0, 384, 0x380), (384, 496, 0x380)] and not u, (spans(r), u)
+    assert [x.confidence for x in r] == ["medium", "high"], r
+    assert st["inplace_words"] == 20 and st["inplace_spans"][0][0] == 0x400000, st
+
+    # Insertion of one record plus a changed id on the next: the dense check
+    # keeps the old shift for that record, so it must not be graded high.
+    rec = lambda i: [i, 0xFF01, 0, 0x300000, 0]
+    us_t = sum((rec(0x20 + k) for k in range(20)), [])
+    jp_t = sum((rec(0x20 + k) for k in range(10)), []) + rec(0x99) + [0x77]         + rec(0)[1:] + sum((rec(0x20 + k) for k in range(11, 20)), [])
+    r, u, st = walk(us_t + b, jp_t + b)
+    assert spans(r) == [(0, 200, 0x380), (200, 220, 0x380), (220, 496, 0x394)], spans(r)
+    assert [x.confidence for x in r] == ["high", "medium", "high"], r
+    assert st["inplace_spans"] == [[0x400000 + 200, 0x400000 + 204]], st
+
+    # Content that cannot be resynchronised is reported, not guessed.
+    r, u, st = walk(seq(0x1000, 100), seq(0x9000, 100))
+    assert not r and len(u) == 1 and u[0].reason == "no resync"
+    # A JP section shorter than the US one leaves the remainder uncertain.
+    r, u, st = walk(a + b, a)
+    assert spans(r) == [(0, 96, 0x380)] and u[0].reason == "beyond JP section", (r, u)
+    assert u[0].us_start == 0x400000 + 96 and u[0].us_end == 0x400000 + 192
+
+
 def run_tool(*args):
     env = dict(os.environ, PYTHONPATH=TOOLS)
     r = subprocess.run([sys.executable, "-m", "regionmap", *args], env=env, cwd=ROOT,
@@ -650,6 +740,35 @@ def test_real_binaries():
         assert m.translate(0x31C138) == 0x31C460
         entry = run_tool("lookup", path, "0x31C138").split()
         assert entry[:4] == ["0031C138", "->", "0031C460", ".text"] and entry[4] == "same"
+
+        # Content walk of the PROGBITS data sections.
+        data = {}
+        for l in text.splitlines():
+            md = re.match(r"data (\S+): (\d+) ranges, (\d+) uncertain \((\d+) bytes\), "
+                          r"inplace (\d+) words, deltas \[(.*)\]$", l)
+            if md:
+                data[md.group(1)] = (int(md.group(2)), int(md.group(4)), md.group(6))
+        for name in (".vutext", ".ctors", ".dtors", ".data", ".eh_frame", ".rodata",
+                     ".gcc_except_table", ".lit4", ".sdata"):
+            assert name in data, (name, text)
+        assert ".bss" not in data and ".sbss" not in data
+        assert data[".vutext"] == (1, 0, "+0x340"), data[".vutext"]
+        vu = [r for r in m.ranges if r.section == ".vutext"]
+        assert [(r.us_start, r.us_end, r.delta) for r in vu] == [(0x399310, 0x3C7E30, 0x340)]
+        # Every PROGBITS byte is either mapped or reported uncertain.
+        for s in m.sections:
+            if s["nobits"] or s["name"] == ".text":
+                continue
+            cov = sum(r.us_end - r.us_start for r in m.ranges if r.section == s["name"])
+            cov += sum(u.us_end - u.us_start for u in m.uncertain if u.section == s["name"])
+            assert cov == s["us_end"] - s["us_start"], s["name"]
+        # The JP .rodata and .sdata are longer, so their later content shifts further.
+        assert m.translate(0x425580) == 0x425900 and m.translate(0x43FD40) == 0x4400D0
+        assert m.translate(0x445B00) == 0x445B00 + 0x388
+        assert run_tool("lookup", path, "0x3C7F00").split()[:5] == \
+            ["003C7F00", "->", "003C8280", ".data", "content"]
+        assert any(r.section == ".data" and r.source == "content" and r.delta == 0x380
+                   for r in m.ranges)
     finally:
         shutil.rmtree(out)
 
@@ -665,6 +784,7 @@ test_gap_diff_synthetic()
 test_trim_conflicting_calls()
 test_padding_and_chunk_confidence()
 test_load_units()
+test_data_walk()
 
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_normalize()
