@@ -39,6 +39,21 @@ if(NOT GENERATED_SOURCES)
     "US release, or the Japanese release section).")
 endif()
 
+# The region is fixed per build: address tables are static const initializers
+# and gsreplay does not link ps2_image.c, so ps2_region cannot be read at run
+# time. Read it from the head of the generated file (tens of MB in total).
+file(READ "${GEN_DIR}/ps2_image.c" _image_head LIMIT 4096)
+string(REGEX MATCH "const u32 ps2_region = ([0-9]+)u;" _region_line "${_image_head}")
+if(NOT _region_line)
+  message(FATAL_ERROR
+    "${PS2_GENERATED_DIR}/ps2_image.c has no 'const u32 ps2_region' line. "
+    "Regenerate it with ps2recomp, see README.md.")
+endif()
+set(PS2_BUILD_REGION "${CMAKE_MATCH_1}")
+message(STATUS "Region of ${PS2_GENERATED_DIR}: ${PS2_BUILD_REGION}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${GEN_DIR}/ps2_image.c")
+
 set(RUNTIME_SOURCES
     runtime/src/ps2_core.c
     runtime/src/ps2_hostprof.c
@@ -55,6 +70,7 @@ set(RUNTIME_SOURCES
     runtime/src/ps2_sif.c
     runtime/src/ps2_vfs.c
     runtime/src/ps2_region.c
+    runtime/src/ps2_addr.c
     runtime/src/ps2_hle_sif.c
     runtime/src/ps2_hle_cdvd.c
     runtime/src/ps2_hle_pad.c
@@ -119,6 +135,7 @@ target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${Vulkan_INCLUDE_DIRS})
 target_link_libraries(ac5 PRIVATE Threads::Threads m
                                   SDL3::SDL3 Vulkan::Vulkan lua54)
+target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 # -static-libgcc makes clang link libunwind statically, so no libunwind.dll.
 target_link_options(ac5 PRIVATE -static-libstdc++ -static-libgcc)
 
@@ -168,6 +185,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
 target_link_libraries(gsreplay PRIVATE Threads::Threads m
                                        SDL3::SDL3 Vulkan::Vulkan)
 target_link_options(gsreplay PRIVATE -static-libstdc++ -static-libgcc)
+target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)
 endif()

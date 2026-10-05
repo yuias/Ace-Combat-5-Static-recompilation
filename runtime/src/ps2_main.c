@@ -10,6 +10,7 @@
 #include "ps2_modapi.h"
 #include "ps2_vfs.h"
 #include "ps2_region.h"
+#include "ps2_addr.h"
 #include "rn.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -644,6 +645,28 @@ int main(int argc, char **argv) {
             ps2_log("warning: no disc at '%s'; CDVD requests will fail", disc);
         else if (ps2_region_check_disc() != 0)
             return 1;
+    }
+    /* Before any hook, .pnach or settings patch writes to guest code. */
+    if (ps2_region != PS2_BUILD_REGION) {
+        ps2_log("addr: the generated image is for region %u but the runtime "
+                "was built for region %d; rebuild from scratch",
+                ps2_region, PS2_BUILD_REGION);
+        return 1;
+    }
+    {
+        int bad = ps2_addr_verify();
+        if (bad) {
+            const char *allow = getenv("PS2_ALLOW_REGION_MISMATCH");
+            if (allow && *allow && strcmp(allow, "0") != 0) {
+                ps2_log("addr: %d entries do not match this executable; "
+                        "PS2_ALLOW_REGION_MISMATCH is set, continuing", bad);
+            } else {
+                ps2_log("addr: %d entries do not match this executable; "
+                        "refusing to run (PS2_ALLOW_REGION_MISMATCH=1 overrides)",
+                        bad);
+                return 1;
+            }
+        }
     }
     ps2_mod_start();
     rn_init();
