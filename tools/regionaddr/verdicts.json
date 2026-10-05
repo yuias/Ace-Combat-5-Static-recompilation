@@ -1,1 +1,130 @@
-{"addresses": {}, "config": {}, "values": {}}
+{
+ "addresses": {
+  "0x00324568": {
+   "jp": "0x00324890",
+   "name": "AC5_PARAM_S8",
+   "note": "CTxtio s8 getter: US and JP are both 72 instructions and 67 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 2 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x00324688": {
+   "jp": "0x003249B0",
+   "name": "AC5_PARAM_U8",
+   "note": "CTxtio u8 getter: US and JP are both 73 instructions and 68 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 2 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x003247B0": {
+   "jp": "0x00324AD8",
+   "name": "AC5_PARAM_S16",
+   "note": "CTxtio s16 getter: US and JP are both 87 instructions and 82 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 2 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x00324910": {
+   "jp": "0x00324C38",
+   "name": "AC5_PARAM_U16",
+   "note": "CTxtio u16 getter: US and JP are both 85 instructions and 80 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 2 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x00324A68": {
+   "jp": "0x00324D90",
+   "name": "AC5_PARAM_S32",
+   "note": "CTxtio s32 getter: US and JP are both 85 instructions and 80 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 2 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x00324BC0": {
+   "jp": "0x00324EE8",
+   "name": "AC5_PARAM_INT",
+   "note": "CTxtio int getter: US and JP are both 84 instructions and 79 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 2 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x00324D10": {
+   "jp": "0x00325038",
+   "name": "AC5_PARAM_FLOAT",
+   "note": "CTxtio float getter: US and JP are both 85 instructions and 80 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 2 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x00324E68": {
+   "jp": "0x00325190",
+   "name": "AC5_PARAM_STRING",
+   "note": "CTxtio string getter: US and JP are both 110 instructions and 106 are identical word for word, including the prologue (sp-0x40 frame, the register saves, a0 and a1 moved to s0 and s3) and the lw v0,0x4CC(s0) of the streaming flag; the only differing words are 3 jal targets (each the JP entry of the same US callee) and 1 ADDIU whose low half moves by +0x390 to the byte-identical warning string, so the map's body-changed status is relocation only. The runtime hooks this entry with 'after', reads entry args 0..2 (list, name, destination) and overwrites v0, f0 or the destination buffer on return; the argument registers and the return convention are unchanged.",
+   "verdict": "relocated-only"
+  },
+  "0x0047EC9C": {
+   "jp": "0x0047F49C",
+   "name": "AC5_NUSNDSTR_SEQ",
+   "note": "The word is a .bss counter touched only by sub_359AF0 (lui 0x48; sw a0,0xEC9C) and sub_359B00 (lui 0x48; lw v0,0xEC9C), each called once, from sub_3598E8; all three are status same. The JP twins at 0x00359E30 and 0x00359E40 use the same instructions with offset 0xF49C, giving 0x0047F49C, which equals the map's +0x800 shift for this range. The runtime only reads the counter (it compares it with the transfer sequence it has completed), and the counter is produced by identical code.",
+   "verdict": "relocated-only"
+  }
+ },
+ "config": {
+  "overrides.json:0x00331320": {
+   "note": "sceSifInitRpc -> hle_sceSifInitRpc; the JP function at 0x00331660 is the same SDK routine: both are 103 instructions, 78 identical, 14 jal/j to the JP entry of the same US callee, and 11 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler returns 0 and ignores its arguments, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x00336680": {
+   "note": "sceSifSearchModuleByName -> hle_sceSifSearchModuleByName; the JP function at 0x003369C0 is the same SDK routine: both are 40 instructions, 34 identical, 4 jal/j to the JP entry of the same US callee, and 2 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler returns -1 and ignores its arguments, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x00339970": {
+   "note": "sceSifInitCmd -> hle_sceSifInitCmd; the JP function at 0x00339CB0 is the same SDK routine: both are 160 instructions, 125 identical, 14 jal/j to the JP entry of the same US callee, and 21 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler returns 0 and ignores its arguments, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x0033E558": {
+   "note": "sceCdNcmdDiskReady -> hle_sceCdDiskReady; the JP function at 0x0033E898 is the same SDK routine: both are 38 instructions, 30 identical, 4 jal/j to the JP entry of the same US callee, and 4 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler returns a constant chosen from the VFS state and ignores its arguments, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x0033F1E0": {
+   "note": "sceCdReadIOPm -> hle_sceCdReadIOPm; the JP function at 0x0033F520 is the same SDK routine: both are 85 instructions, 65 identical, 6 jal/j to the JP entry of the same US callee, and 14 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler reads a0 (lbn), a1 (sector count) and a2 (buffer) like sceCdRead, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x0033F338": {
+   "note": "sceCdGetToc -> hle_sceCdGetToc; the JP function at 0x0033F678 is the same SDK routine: both are 164 instructions, 147 identical, 6 jal/j to the JP entry of the same US callee, and 11 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler reads a0 (buffer), writes 1024 bytes there and returns 1, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x0033F730": {
+   "note": "sceCdGetError -> hle_sceCdGetError; the JP function at 0x0033FA70 is the same SDK routine: both are 38 instructions, 30 identical, 4 jal/j to the JP entry of the same US callee, and 4 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler takes no arguments and returns the last error, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x0033F7C8": {
+   "note": "sceCdStatus -> hle_sceCdStatus; the JP function at 0x0033FB08 is the same SDK routine: both are 46 instructions, 35 identical, 5 jal/j to the JP entry of the same US callee, and 6 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler takes no arguments and returns a constant status, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x0033F880": {
+   "note": "sceCdBreak -> hle_sceCdBreak; the JP function at 0x0033FBC0 is the same SDK routine: both are 46 instructions, 35 identical, 4 jal/j to the JP entry of the same US callee, and 7 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler ignores its arguments and returns 1, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  },
+  "overrides.json:0x0033F938": {
+   "note": "sceCdMmode -> hle_sceCdMmode; the JP function at 0x0033FC78 is the same SDK routine: both are 52 instructions, 38 identical, 5 jal/j to the JP entry of the same US callee, and 9 immediate-only differences (low halves of data and code addresses, deltas among +0x340, +0x380 and +0x390), with no other change in opcode or registers. The override replaces the whole body and the handler reads a0 (media mode) and returns 1, a convention that the identical argument and result registers keep. The handler uses no hard-coded guest address.",
+   "verdict": "relocated-only"
+  }
+ },
+ "values": {
+  ".vutext identical": {
+   "note": "The .vutext sections are 191264 bytes in both executables (US 0x00399310, JP 0x00399650) and compare byte-identical, so the VU-side constants in the rn_vp sources are region-independent; only the section's load address and the RN_VP_* guest addresses move.",
+   "verdict": "data-same-value"
+  },
+  "ps2_hle_iop.c app object offsets": {
+   "note": "Diagnostic paths only (ps2_dump_archive, PS2_TRACE_LOAD). The app pointer is gp-relative with the same offset -20420 in both executables (generated JP value 0x0044362C = US + 0x380, the gp shift), and the app constructor sub_100318 (status same, 0x00100318 in both) stores the fields at +19532 (0x4C4C), +19536 (0x4C50), +19540 (0x4C54) and +19596 (0x4C8C) with identical words (only jal targets differ); +19592 (0x4C88) is read in sub_10F6B8, also same. Of all instructions using those immediates, 95 of 97 (+19532), 32 of 32 (+19536), 89 of 94 (+19540), 37 of 38 (+19592) and 73 of 74 (+19596) have a JP twin word that is identical; the remainder are in body-changed or unmapped functions (sub_28C1A8, sub_28DC20, sub_2A5578, sub_2CAB10, sub_2CEAB0, sub_2F0058, and two unmapped sites near 0x002B0070) where JP has accesses with the same immediates at nearby addresses, or one addiu that matches the immediate only by coincidence. The disc-queue and sound-channel objects are gp-relative too, but JP moved them +0x388 while gp moved +0x380: their gp offsets become -17008 -> -17000 and -10164 -> -10156, all 42 and 44 US accessors have JP twins with exactly those new offsets, and the generated AC5_DISC_QUEUE_PTR (0x00444388) and AC5_SND_CHANNELS_PTR (0x00445E44) agree. The channel-array fields (+102416, +102420, +102428, stride 140) exceed a 16-bit immediate, so they were not matched by offset; the 44 accessors that load the array pointer (sub_34A9B0 and neighbours) are all status same. The other struct offsets in ps2_hle_iop.c (archive, loader, sound-object and request fields) were not compared; they are read only on the PS2_TRACE_LOAD / archive-dump diagnostic paths.",
+   "verdict": "relocated-only"
+  },
+  "ps2_mod.c archive_member_setup offsets": {
+   "note": "sub_102A78 (the hooked set-up, 26 instructions) is byte-identical at the same address 0x00102A78 in both executables, including its state+0x1C store (sw v0,0x1C). The loader = state-4 relation, the mode byte and the other accesses are in the caller: its four call sites are all in sub_1020D8 (status same, same address, 577 instructions: 546 identical, 26 jal twins, 5 addiu data-pointer low halves at +0x380), and every access of the loader at +0x30 (slot), +0x38 (count), +0x40 (table) and +0xF4 (member array) is among the identical words (for example lw 0x38 and lw 0x40 at 0x00102390 and 0x00102398, lhu 0xF4 at 0x0010222C, sw 0x30 at 0x00102244). The offsets +48, +56, +64, +244 and state +28 therefore hold on JP. The DATA.TBL contents themselves come from the disc, not from this code.",
+   "verdict": "same-code"
+  },
+  "ps2_params.c LIST_STREAMING 1228": {
+   "note": "1228 is 0x4CC. In all eight JP getters (0x00324890 .. 0x00325190) the instruction lw v0,0x4CC(s0) (word 0x8E0204CC, s0 = the list argument a0) is at the same instruction index as in the US getter (index 10, 11 or 12 from the entry) and is followed by the same bne, so the list object's streaming flag is read from offset 1228 in JP as well. The getters take the list in a0 and the name in a1 unchanged.",
+   "verdict": "same-code"
+  },
+  "ps2_settings.c widescreen values": {
+   "note": "JP 0x00440BA8 and 0x00440BAC (the generated AC5_WS_0 and AC5_WS_1, in .lit4, +0x380 from the US words at 0x00440828 and 0x0044082C) hold 0x440315C2 and 0x441013D7, equal to ws_orig; the neighbouring words (0x3FAAAAAA and 0x3D1D466C before; 0x440ED0A3 and 0x441CF7AE after) are also equal. The generator's word check reports 0 differences for both entries.",
+   "verdict": "data-same-value"
+  },
+  "rn_intent.c scratchpad 0x70003A30/0x70003A34/0x70003B30": {
+   "note": "Every instruction that forms or uses 0x70003A30, 0x70003A34 and 0x70003B30 (lui 0x7000 plus lwc1/swc1/lw/sw/ori/addiu with imm 0x3A30, 0x3A34, 0x3B30) sits in sub_114F20 (sky dome), sub_115B50 or sub_115FB0; all three are status same, and the hit sites pair one to one between US and JP at a constant +8 address shift with the same instruction words. A word-by-word comparison of the three functions finds only jal targets and data-pointer low halves different (373 instructions: 362 identical, 11 jal; 280: 260 identical, 19 jal, 1 addiu; 493: 480 identical, 10 jal, 3 addiu), so the ring table is written and read at the same scratchpad offsets in JP.",
+   "verdict": "same-code"
+  },
+  "rn_intent.c sky dome offsets": {
+   "note": "sub_114F20 (dome, 373 instructions) and sub_114A70 (haze, 300) are status same and differ only in 11 and 6 jal targets that map to the matching JP callees (slti 33 / 0x21 bounds are in them); the loop bounds slti 29 (0x1D) and 32 (0x20) are at 0x0011636C..0x00116714 inside sub_115FB0 (status same, 480 of 493 instructions identical, 10 jal, 3 addiu), and the offsets into the dome block (including the +64 clip block) are among the identical words, so rings = 29, segs = 32 and dome + 64 hold. The entry words the tap checks (0x27BDFF90 0xFFB10018 at the dome, 0x3C014580 and 0x27BDFF70 at the haze) are covered by the generated word checks. The segment and ring tables the tap copies are addressed by the generated JP values.",
+   "verdict": "same-code"
+  }
+ }
+}
