@@ -12,8 +12,9 @@ from ps2recomp.elf import ElfFile
 
 from .codematch import CodeMatcher, load_units
 from .common import file_info, image_bounds, pair_sections
-from .datamap import collect_evidence, map_progbits
-from .mapfile import Range, RegionMap, Uncertain
+from .datamap import (check_evidence, collect_evidence, collect_weak_evidence, map_nobits,
+                      map_progbits)
+from .mapfile import Range, RegionMap, Uncertain, merge_ranges
 from .normalize import find_gp, hi_range_for, text_stream
 
 
@@ -99,30 +100,51 @@ def cmd_build(args, log=print):
     ranges.sort(key=lambda r: r.us_start)
     uncertain = [u for u in uncertain if u.section != ".text"]
 
-    # Content walk replaces the placeholder of every PROGBITS data section;
-    # NOBITS sections keep theirs.
+    # Content walk replaces the placeholder of every PROGBITS data section,
+    # reference evidence the one of every NOBITS section.
     t1 = time.time()
     bounds = image_bounds(us, jp)
-    walked = {p.name for p in pairs if not p.nobits and p.name != ".text"}
-    ranges = [r for r in ranges if r.section not in walked]
-    uncertain = [u for u in uncertain if u.section not in walked]
-    data_stats = {}
-    for p in pairs:
-        if p.name in walked:
-            r, u, st = map_progbits(us, jp, p, cm.code_translate, bounds, log=log)
-            ranges += r
-            uncertain += u
-            data_stats[p.name] = st
-    ranges.sort(key=lambda r: r.us_start)
-    uncertain.sort(key=lambda u: u.us_start)
-    log("data: %.1f s" % (time.time() - t1))
+    data_pairs = [p for p in pairs if p.name != ".text"]
+    replaced = {p.name for p in data_pairs}
+    ranges = [r for r in ranges if r.section not in replaced]
+    uncertain = [u for u in uncertain if u.section not in replaced]
     evidence = collect_evidence(cm, pairs)
     log("xref evidence: %d sites, %d distinct pairs"
         % (sum(evidence.values()), len(evidence)))
+    data_stats, boundaries = {}, []
+    for p in data_pairs:
+        if p.nobits:
+            r, u, b, st = map_nobits(p, evidence, log=log)
+            boundaries += b
+        else:
+            r, u, st = map_progbits(us, jp, p, cm.code_translate, bounds, log=log)
+        ranges += r
+        uncertain += u
+        data_stats[p.name] = st
+    ranges = merge_ranges(ranges)
+    uncertain.sort(key=lambda u: u.us_start)
+    log("data: %.1f s" % (time.time() - t1))
 
+    stats = {"code": cm.stats, "data": data_stats, "nobits_boundaries": boundaries}
     rmap = RegionMap(us_info, jp_info, [_section_dict(p) for p in pairs],
-                     ranges, uncertain, funcs, {"code": cm.stats, "data": data_stats})
+                     ranges, uncertain, funcs, stats)
     rmap.validate()
+    agree, disagree, unmapped, worst = check_evidence(rmap, evidence)
+    # Pairs from changed bodies were not used to build the map; they check it.
+    weak = collect_weak_evidence(cm, pairs, evidence)
+    weak_agree, weak_disagree, _, _ = check_evidence(rmap, weak)
+    stats.update(evidence_agree=agree, evidence_disagree=disagree,
+                 evidence_unmapped=unmapped, evidence_disagreements=worst,
+                 weak_agree=weak_agree, weak_disagree=weak_disagree)
+    log("evidence: %d agree, %d disagree" % (agree, disagree))
+    log("weak evidence (changed bodies, not used): %d agree, %d disagree"
+        % (weak_agree, weak_disagree))
+    if unmapped:
+        log("evidence unmapped: %d" % unmapped)
+    for u, j, t, n in worst[:10]:
+        log("  disagree %08X: code says %08X, map says %08X (%d sites)" % (u, j, t, n))
+    for lo, hi, da, db, name in boundaries:
+        log("uncertain boundary %s %08X-%08X: %+#x -> %+#x" % (name, lo, hi, da, db))
     path = os.path.join(args.out, "regionmap.json")
     rmap.save(path)
     log("wrote %s" % path)

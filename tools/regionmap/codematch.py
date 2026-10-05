@@ -460,9 +460,12 @@ class CodeMatcher:
         self.sync_duplicates()
         self._ranges = None
 
-    def aligned_pairs(self) -> Iterator[Tuple[int, int]]:
-        """(US word index, JP word index) for words known to correspond."""
+    def aligned_pairs(self, statuses=("same", "body-changed")) -> Iterator[Tuple[int, int]]:
+        """(US word index, JP word index) for words known to correspond, taken
+        from units whose status is in `statuses`."""
         for u in self.reps:
+            if u.status not in statuses:
+                continue
             if u.status == "same":
                 i, j = self.us.index(u.us), self.jp.index(u.jp)
                 for k in range((u.us_end - u.us) >> 2):

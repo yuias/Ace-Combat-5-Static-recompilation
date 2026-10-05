@@ -15,6 +15,7 @@ POINTER_SLACK = 0x1000  # tolerated difference for pointers the code map cannot 
 DENSE_WORDS = 32        # lookahead for the dense in-place check
 DENSE_MIN_NONZERO = 6   # non-zero words needed in that window to trust it
 DENSE_NUM, DENSE_DEN = 3, 5  # required share of agreeing non-zero words
+WEAK_MIN_SITES = 2      # sites a pair needs when only body-changed code shows it
 
 
 def _inside(spans: List[Tuple[int, int]], addr: int) -> bool:
@@ -24,11 +25,12 @@ def _inside(spans: List[Tuple[int, int]], addr: int) -> bool:
     return False
 
 
-def evidence_pairs(cm, sections: List[SecPair]) -> Iterator[Tuple[int, int]]:
-    """(US target, JP target) of data references seen at aligned code words.
-    Only REF_ABS/REF_GP pairs of the same kind count; the US target must lie
-    in a non-.text section and the JP target in some JP section, which also
-    drops constants that only look like addresses."""
+def evidence_pairs(cm, sections: List[SecPair],
+                   statuses=("same", "body-changed")) -> Iterator[Tuple[int, int]]:
+    """(US target, JP target) of data references seen at aligned code words of
+    units with one of `statuses`. Only REF_ABS/REF_GP pairs of the same kind
+    count; the US target must lie in a non-.text section and the JP target in
+    some JP section, which also drops constants that only look like addresses."""
     us, jp = cm.us, cm.jp
     us_data = [(p.us_start, p.us_end) for p in sections if p.name != ".text"]
     jp_all = [(p.jp_start, p.jp_end) for p in sections]
@@ -36,7 +38,7 @@ def evidence_pairs(cm, sections: List[SecPair]) -> Iterator[Tuple[int, int]]:
     # identical pair there is a constant (bit pattern, float) that looks like one.
     moved = [(p.us_start, p.us_end) for p in sections
              if p.name != ".text" and p.jp_start != p.us_start]
-    for i, j in cm.aligned_pairs():
+    for i, j in cm.aligned_pairs(statuses):
         a = us.refs.get(i)
         if a is None or a[0] not in (REF_ABS, REF_GP):
             continue
@@ -51,8 +53,25 @@ def evidence_pairs(cm, sections: List[SecPair]) -> Iterator[Tuple[int, int]]:
 
 
 def collect_evidence(cm, sections: List[SecPair]) -> Dict[Tuple[int, int], int]:
-    """{(us_target, jp_target): number of code sites}."""
-    return dict(Counter(evidence_pairs(cm, sections)))
+    """{(us_target, jp_target): number of code sites}. Aligned words of
+    body-changed functions can be misaligned inside a changed block, so a pair
+    seen only there must be seen at two sites to count; anything in an
+    identical function counts at once."""
+    strong = Counter(evidence_pairs(cm, sections, ("same",)))
+    weak = Counter(evidence_pairs(cm, sections, ("body-changed",)))
+    out = dict(strong)
+    for pair, n in weak.items():
+        if pair in out or n >= WEAK_MIN_SITES:
+            out[pair] = out.get(pair, 0) + n
+    return out
+
+
+def collect_weak_evidence(cm, sections: List[SecPair],
+                          evidence: Dict[Tuple[int, int], int]) -> Dict[Tuple[int, int], int]:
+    """Body-changed pairs that `collect_evidence` left out: not used to build
+    the map, so they can still check it independently."""
+    weak = Counter(evidence_pairs(cm, sections, ("body-changed",)))
+    return {pair: n for pair, n in weak.items() if pair not in evidence}
 
 
 def make_same_word(code_translate: Callable[[int], Optional[int]],
@@ -266,3 +285,124 @@ def map_progbits(us_elf, jp_elf, sec: SecPair, code_translate, image_bounds,
         % (sec.name, len(ranges), len(unc), stats["uncertain_bytes"],
            stats["inplace_words"], ", ".join("%+#x" % d for d in stats["deltas"])))
     return ranges, unc, stats
+
+
+def _section_base(sec: SecPair) -> Tuple[List[Range], List[Uncertain]]:
+    """Whole-section shift by the start delta, clipped to the shorter section."""
+    delta = sec.jp_start - sec.us_start
+    common = min(sec.us_end - sec.us_start, sec.jp_end - sec.jp_start)
+    ranges = [Range(sec.us_start, sec.us_start + common, delta, sec.name, "section", "low")]
+    unc = []
+    if sec.us_start + common < sec.us_end:
+        unc.append(Uncertain(sec.us_start + common, sec.us_end, sec.name, [delta],
+                             "size differs"))
+    return ranges, unc
+
+
+def map_nobits(sec: SecPair, evidence: Dict[Tuple[int, int], int], log=print
+               ) -> Tuple[List[Range], List[Uncertain], List[list], dict]:
+    """Map a section without content from code references alone. Objects keep
+    their order, so the shift only grows along the section and each run of
+    equal shifts is one range; where the shift changes, the exact split point
+    is unknown and goes to `boundaries` as [lo, hi, delta_a, delta_b, section]."""
+    base = sec.jp_start - sec.us_start
+    # One JP target per US target: the one more code sites agree on.
+    best: Dict[int, Tuple[int, int]] = {}
+    conflicts = outside = 0
+    for (u, j), n in sorted(evidence.items()):
+        if not (sec.us_start <= u < sec.us_end):
+            continue
+        if not (sec.jp_start <= j < sec.jp_end):
+            outside += 1
+            continue
+        if u in best:
+            conflicts += 1
+            if best[u][1] >= n:
+                continue
+        best[u] = (j - u, n)
+    pairs = sorted((u, d) for u, (d, n) in best.items())
+
+    # Runs of equal shift as [first, last, delta, pairs].
+    runs: List[list] = []
+    for u, d in pairs:
+        if runs and runs[-1][2] == d:
+            runs[-1][1] = u
+            runs[-1][3] += 1
+        else:
+            runs.append([u, u, d, 1])
+    # A lone pair between two runs of one shift is a misread reference.
+    dropped = 0
+    k = 1
+    while k < len(runs) - 1:
+        if runs[k][3] == 1 and runs[k - 1][2] == runs[k + 1][2]:
+            dropped += 1
+            runs[k - 1][1] = runs[k + 1][1]
+            runs[k - 1][3] += runs[k + 1][3]
+            del runs[k:k + 2]
+        else:
+            k += 1
+
+    stats = {"pairs": len(pairs), "runs": len(runs), "noise_dropped": dropped,
+             "conflicts": conflicts, "outside_jp": outside}
+    boundaries: List[list] = []
+    if not runs:
+        ranges, unc = _section_base(sec)
+        stats["deltas"] = [base]
+        log("data %s: no evidence, section shift %+#x" % (sec.name, base))
+        return ranges, unc, boundaries, stats
+
+    ranges, unc = [], []
+    if runs[0][2] == base:
+        runs[0][0] = sec.us_start
+    elif runs[0][0] > sec.us_start:
+        unc.append(Uncertain(sec.us_start, runs[0][0], sec.name, [base, runs[0][2]],
+                             "no evidence"))
+    for i, (first, last, d, _) in enumerate(runs):
+        if i + 1 < len(runs):
+            nxt, d_next = runs[i + 1][0], runs[i + 1][2]
+            end = nxt
+            if last + 4 < nxt:
+                boundaries.append([last + 4, nxt, d, d_next, sec.name])
+            if d_next < d:
+                # Objects only move further apart, so this is a misread run; the
+                # gap would map back onto JP addresses already taken.
+                log("warning: %s shift shrinks %+#x -> %+#x at %08X"
+                    % (sec.name, d, d_next, nxt))
+                end = min(last + 4, nxt)
+                if end < nxt:
+                    unc.append(Uncertain(end, nxt, sec.name, [d, d_next], "shift shrinks"))
+        else:
+            end = min(sec.us_end, sec.jp_end - d)      # never map past the JP section
+        if end > first:
+            ranges.append(Range(first, end, d, sec.name, "xref", "medium"))
+    if ranges and ranges[-1].us_end < sec.us_end:
+        unc.append(Uncertain(ranges[-1].us_end, sec.us_end, sec.name,
+                             [ranges[-1].delta], "size differs"))
+    stats["deltas"] = sorted({r.delta for r in ranges})
+    stats["boundaries"] = len(boundaries)
+    log("data %s: %d ranges, %d uncertain, %d boundaries, %d evidence pairs "
+        "(%d noise dropped, %d conflicts), deltas [%s]"
+        % (sec.name, len(ranges), len(unc), len(boundaries), len(pairs), dropped,
+           conflicts, ", ".join("%+#x" % d for d in stats["deltas"])))
+    return merge_ranges(ranges), unc, boundaries, stats
+
+
+def check_evidence(rmap, evidence: Dict[Tuple[int, int], int], limit: int = 50
+                   ) -> Tuple[int, int, int, List[list]]:
+    """Compare the finished map with the evidence pairs. Returns (agree,
+    disagree, unmapped, worst) where `worst` lists up to `limit` disagreements
+    as [us, jp, translated, sites], most sites first. A target the map leaves
+    uncertain is unmapped, not a disagreement."""
+    agree = disagree = unmapped = 0
+    bad = []
+    for (u, j), n in evidence.items():
+        t = rmap.translate(u)
+        if t is None:
+            unmapped += 1
+        elif t == j:
+            agree += 1
+        else:
+            disagree += 1
+            bad.append([u, j, t, n])
+    bad.sort(key=lambda b: (-b[3], b[0]))
+    return agree, disagree, unmapped, bad[:limit]

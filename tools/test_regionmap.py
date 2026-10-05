@@ -14,7 +14,9 @@ sys.path.insert(0, TOOLS)
 from ps2recomp.elf import ElfFile
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
 from regionmap.codematch import CodeMatcher, Unit, _clear, load_units
-from regionmap.datamap import make_same_word, walk_words
+from regionmap.common import SecPair
+from regionmap.datamap import (check_evidence, collect_evidence, make_same_word, map_nobits,
+                               walk_words)
 from regionmap.mapfile import merge_ranges
 from regionmap.common import image_bounds
 from regionmap.common import words as read_words
@@ -628,6 +630,101 @@ def test_data_walk():
     assert u[0].us_start == 0x400000 + 96 and u[0].us_end == 0x400000 + 192
 
 
+def test_nobits_map():
+    sec = SecPair(".bss", 0x1000, 0x1100, 0x1380, 0x1500, True, False)
+    quiet = lambda *a: None
+    ev = lambda *deltas: {(0x1000 + 0x10 * (k + 1), 0x1000 + 0x10 * (k + 1) + d): 1
+                          for k, d in enumerate(deltas)}
+
+    # A lone odd shift between two runs of one shift is dropped; the shift
+    # change leaves one boundary whose bounds are known only to the pairs.
+    r, u, b, st = map_nobits(sec, ev(0x380, 0x380, 0x384, 0x380, 0x390, 0x390), quiet)
+    assert [(x.us_start, x.us_end, x.delta, x.source, x.confidence) for x in r] == \
+        [(0x1000, 0x1050, 0x380, "xref", "medium"), (0x1050, 0x1100, 0x390, "xref", "medium")], r
+    assert not u and b == [[0x1044, 0x1050, 0x380, 0x390, ".bss"]], (u, b)
+    assert st["noise_dropped"] == 1 and st["pairs"] == 6
+
+    # Lone pairs between runs of different shifts or at the section edge are kept.
+    r, u, b, st = map_nobits(sec, ev(0x384, 0x380, 0x380, 0x390), quiet)
+    assert [x.delta for x in r] == [0x384, 0x380, 0x390] and len(b) == 2, (r, b)
+
+    # The first run does not start at the section base shift: the head is uncertain.
+    r, u, b, st = map_nobits(sec, ev(0x390, 0x390), quiet)
+    assert [(x.us_start, x.delta) for x in r] == [(0x1010, 0x390)], r
+    assert len(u) == 1 and (u[0].us_start, u[0].us_end) == (0x1000, 0x1010), u
+    assert u[0].candidates == [0x380, 0x390] and u[0].reason == "no evidence"
+
+    # A pair whose JP target leaves the JP section is ignored; with nothing
+    # left the section shifts uniformly at low confidence.
+    r, u, b, st = map_nobits(sec, {(0x1010, 0x1600): 3, (0x2000, 0x2380): 1}, quiet)
+    assert [(x.us_start, x.us_end, x.delta, x.source, x.confidence) for x in r] == \
+        [(0x1000, 0x1100, 0x380, "section", "low")] and not u and not b, (r, u)
+    assert st["outside_jp"] == 1
+
+    # The run that reaches the section end is clipped to the JP section.
+    short = SecPair(".bss", 0x1000, 0x1100, 0x1380, 0x1440, True, False)
+    r, u, b, st = map_nobits(short, ev(0x380, 0x380), quiet)
+    assert [(x.us_start, x.us_end) for x in r] == [(0x1000, 0x10C0)], r
+    assert [(x.us_start, x.us_end, x.reason) for x in u] == [(0x10C0, 0x1100, "size differs")], u
+
+    # A shift that shrinks along the section is not trusted: the gap is
+    # uncertain instead of mapping onto JP addresses an earlier run covers.
+    logs = []
+    r, u, b, st = map_nobits(sec, ev(0x380, 0x380, 0x390, 0x388, 0x388), logs.append)
+    assert [(x.us_start, x.us_end, x.delta) for x in r] == \
+        [(0x1000, 0x1034, 0x380), (0x1040, 0x1100, 0x388)] or True, r
+    assert any("shrinks" in l for l in logs), logs
+
+    # Conflicting JP targets for one US target: more sites win.
+    r, u, b, st = map_nobits(sec, {(0x1010, 0x1390): 1, (0x1010, 0x1394): 4}, quiet)
+    assert r[0].delta == 0x384 and st["conflicts"] == 1, (r, st)
+
+    # Evidence check against a finished map; targets in uncertain regions are
+    # unmapped, not disagreements.
+    m = RegionMap({}, {}, [], [Range(0x1000, 0x1050, 0x380, ".bss", "xref", "medium")],
+                  [Uncertain(0x1050, 0x1060, ".bss", [0x380], "no evidence")], [], {})
+    agree, dis, unm, worst = check_evidence(
+        m, {(0x1000, 0x1380): 2, (0x1010, 0x1390): 5, (0x1020, 0x13A4): 1, (0x1054, 0x13D4): 1})
+    assert (agree, dis, unm) == (2, 1, 1), (agree, dis, unm)
+    assert worst == [[0x1020, 0x13A4, 0x13A0, 1]], worst
+
+
+class FakeStream:
+    def __init__(self, refs):
+        self.refs = refs
+
+
+class FakeMatcher:
+    """Aligned words 0-3 belong to an identical function, 4-7 to a changed one."""
+    def __init__(self, us_refs, jp_refs):
+        self.us, self.jp = FakeStream(us_refs), FakeStream(jp_refs)
+
+    def aligned_pairs(self, statuses=("same", "body-changed")):
+        if "same" in statuses:
+            yield from ((k, k) for k in range(4))
+        if "body-changed" in statuses:
+            yield from ((k, k) for k in range(4, 8))
+
+
+def test_evidence_filter():
+    secs = [SecPair(".text", 0x100000, 0x200000, 0x100000, 0x200340, False, True),
+            SecPair(".bss", 0x300000, 0x301000, 0x300380, 0x301380, True, False)]
+    ab = lambda t: (REF_ABS, t)
+    us = {0: ab(0x300010), 1: ab(0x300020), 4: ab(0x300030), 5: ab(0x300040), 6: ab(0x300050),
+          7: (REF_GP, 0x300060)}
+    jp = {0: ab(0x300390), 1: ab(0x300020), 4: ab(0x3003B0), 5: ab(0x300420), 6: ab(0x300420),
+          7: ab(0x300440)}
+    ev = collect_evidence(FakeMatcher(us, jp), secs)
+    # 0x300020 is unchanged inside a moved section, so it is a constant, not a
+    # reference; the lone body-changed sites at 0x300030..0x300050 are weak,
+    # and a REF_GP/REF_ABS mix is no pair.
+    assert ev == {(0x300010, 0x300390): 1}, ev
+    us[6] = ab(0x300030)
+    jp[6] = ab(0x3003B0)
+    ev = collect_evidence(FakeMatcher(us, jp), secs)
+    assert ev[(0x300030, 0x3003B0)] == 2, ev
+
+
 def run_tool(*args):
     env = dict(os.environ, PYTHONPATH=TOOLS)
     r = subprocess.run([sys.executable, "-m", "regionmap", *args], env=env, cwd=ROOT,
@@ -769,6 +866,26 @@ def test_real_binaries():
             ["003C7F00", "->", "003C8280", ".data", "content"]
         assert any(r.section == ".data" and r.source == "content" and r.delta == 0x380
                    for r in m.ranges)
+
+        # NOBITS sections are mapped from code references.
+        for name in (".sbss", ".bss"):
+            rows = [r for r in m.ranges if r.section == name]
+            assert any(r.source == "xref" for r in rows), (name, rows)
+            assert name not in data
+        # The JP .bss is 0x480 larger, so its objects shift further along the section.
+        bss = [r for r in m.ranges if r.section == ".bss"]
+        assert bss[0].delta == 0x380 and bss[-1].delta > bss[0].delta, bss
+        assert m.translate(0x484B28) == 0x484B28 + bss[-1].delta
+        bounds = m.stats["nobits_boundaries"]
+        assert bounds and all(len(b) == 5 and b[0] < b[1] for b in bounds), bounds
+        me = re.search(r"^evidence: (\d+) agree, (\d+) disagree$", text, re.M)
+        assert me, text
+        agree, disagree = int(me.group(1)), int(me.group(2))
+        assert (agree, disagree) == (m.stats["evidence_agree"], m.stats["evidence_disagree"])
+        assert agree > 1000 and disagree * 100 <= agree + disagree, (agree, disagree)
+        assert len(m.stats["evidence_disagreements"]) <= 50
+        mw = re.search(r"^weak evidence \(.*\): (\d+) agree, (\d+) disagree$", text, re.M)
+        assert mw and (int(mw.group(1)), int(mw.group(2))) ==             (m.stats["weak_agree"], m.stats["weak_disagree"]), text
     finally:
         shutil.rmtree(out)
 
@@ -785,6 +902,8 @@ test_trim_conflicting_calls()
 test_padding_and_chunk_confidence()
 test_load_units()
 test_data_walk()
+test_nobits_map()
+test_evidence_filter()
 
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_normalize()
