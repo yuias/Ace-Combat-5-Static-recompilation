@@ -135,7 +135,7 @@ target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                        ${Vulkan_INCLUDE_DIRS})
 target_link_libraries(ac5 PRIVATE Threads::Threads m
-                                  SDL3::SDL3 Vulkan::Vulkan lua54)
+                                  SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt)
 target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 # -static-libgcc makes clang link libunwind statically, so no libunwind.dll.
 target_link_options(ac5 PRIVATE -static-libstdc++ -static-libgcc)
@@ -184,7 +184,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                             ${Vulkan_INCLUDE_DIRS})
 target_link_libraries(gsreplay PRIVATE Threads::Threads m
-                                       SDL3::SDL3 Vulkan::Vulkan)
+                                       SDL3::SDL3 Vulkan::Vulkan ole32 avrt)
 target_link_options(gsreplay PRIVATE -static-libstdc++ -static-libgcc)
 target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
