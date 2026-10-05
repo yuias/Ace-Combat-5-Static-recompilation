@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -9,8 +11,13 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 
+from ps2recomp.elf import ElfFile
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
 from regionmap.mapfile import merge_ranges
+from regionmap.common import image_bounds
+from regionmap.common import words as read_words
+from regionmap.normalize import (REF_ABS, REF_CALL, REF_GP, find_gp, hi_range_for,
+                                 normalize_stream, scan_gp, text_stream)
 
 US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
 JP = os.path.join(ROOT, "tmp", "jp", "SLPS_254.18")
@@ -124,6 +131,164 @@ def test_json_roundtrip():
         shutil.rmtree(d)
 
 
+AT, V0, A0, A1, GP = 1, 2, 4, 5, 28
+BASE = 0x100000
+HI_RANGE = (0x10, 0x48)
+
+
+def i_type(op, rs, rt, imm):
+    return (op << 26) | (rs << 21) | (rt << 16) | (imm & 0xFFFF)
+
+
+def r_type(funct, rs, rt, rd):
+    return (rs << 21) | (rt << 16) | (rd << 11) | funct
+
+
+def lui(rt, imm):
+    return i_type(0x0F, 0, rt, imm)
+
+
+def addiu(rt, rs, imm):
+    return i_type(0x09, rs, rt, imm)
+
+
+def lw(rt, off, base):
+    return i_type(0x23, base, rt, off)
+
+
+def jal(target):
+    return (3 << 26) | (target >> 2)
+
+
+def test_normalize_synthetic():
+    # JAL: target masked, call recorded relative to the delay-slot address region.
+    s = normalize_stream([jal(0x100800), 0], BASE, HI_RANGE, None)
+    assert s.norm == [3 << 26, 0]
+    assert s.refs[0] == (REF_CALL, 0x100800)
+    assert s.stats["call"] == 1 and s.index(BASE + 4) == 1 and s.addr(1) == BASE + 4
+    s = normalize_stream([(2 << 26) | (0x200400 >> 2)], BASE, HI_RANGE, None)
+    assert s.norm == [2 << 26] and s.refs[0] == (REF_CALL, 0x200400)
+
+    # lui/addiu pair with a negative low half.
+    w = [lui(A0, 0x40), addiu(A0, A0, -0x10)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm == [w[0] & 0xFFFF0000, w[1] & 0xFFFF0000]
+    assert s.refs == {1: (REF_ABS, 0x3FFFF0)}
+    assert s.stats["lui"] == 1 and s.stats["abs"] == 1
+
+    # Indexed table access keeps the high half across addu.
+    w = [lui(AT, 0x40), r_type(0x21, AT, V0, AT), lw(V0, 0x20, AT)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm[2] == w[2] & 0xFFFF0000 and s.norm[1] == w[1]
+    assert s.refs[2] == (REF_ABS, 0x400020)
+
+    # Float constants (lui outside the image window) are left alone.
+    w = [lui(AT, 0x4120), i_type(0x39, AT, 0, 0)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm == w and not s.refs
+
+    # gp-relative access.
+    gp = 0x44F000
+    w = [lw(V0, -0x7FF0, GP)]
+    s = normalize_stream(w, BASE, HI_RANGE, gp)
+    assert s.norm == [w[0] & 0xFFFF0000] and s.refs[0] == (REF_GP, gp - 0x7FF0)
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm == w and not s.refs, "gp unknown: not masked"
+
+    # A register overwritten by andi loses its high half.
+    w = [lui(A0, 0x40), i_type(0x0C, A0, A0, 0xFF), addiu(A1, A0, 4)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm[2] == w[2] and not s.refs
+    # Same for a load into the register, and a store leaves it alone.
+    w = [lui(A0, 0x40), i_type(0x2B, A0, V0, 0), lw(A0, 0, V0), addiu(A1, A0, 4)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.refs == {1: (REF_ABS, 0x400000)} and s.norm[3] == w[3]
+
+    # State does not leak past a return (the delay slot still sees it).
+    w = [lui(V0, 0x40), r_type(0x08, 31, 0, 0), lw(A1, 4, V0), lw(A0, 8, V0)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.refs == {2: (REF_ABS, 0x400004)} and s.norm[3] == w[3]
+    # Same after a plain jump.
+    w = [lui(V0, 0x40), (2 << 26) | (BASE >> 2), 0, lw(A0, 8, V0)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm[3] == w[3]
+    # A call clears caller-saved registers after its delay slot, but the delay
+    # slot itself still pairs with the lui, and saved registers survive.
+    s0 = 16
+    w = [lui(A0, 0x40), lui(s0, 0x41), jal(0x100800), addiu(A0, A0, -0x10),
+         addiu(A0, A0, -0x10), lw(V0, 4, s0)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm[3] == w[3] & 0xFFFF0000 and s.refs[3] == (REF_ABS, 0x3FFFF0)
+    assert s.norm[4] == w[4], "a0 is clobbered by the call"
+    assert s.refs[5] == (REF_ABS, 0x410004), "s0 survives the call"
+    # JALR clears caller-saved registers too.
+    w = [lui(A0, 0x40), r_type(0x09, V0, 0, 31), 0, addiu(A0, A0, 4)]
+    s = normalize_stream(w, BASE, HI_RANGE, None)
+    assert s.norm[3] == w[3]
+
+    # Two bodies that differ only in addresses normalize identically.
+    a = [lui(A0, 0x40), addiu(A0, A0, 0x100), jal(0x100200), 0, lw(V0, 8, A0), 0]
+    b = [lui(A0, 0x41), addiu(A0, A0, 0x480), jal(0x100540), 0, lw(V0, 8, A0), 0]
+    assert normalize_stream(a, BASE, HI_RANGE, None).norm == \
+        normalize_stream(b, BASE, HI_RANGE, None).norm
+    c = list(b)
+    c[4] = lw(V0, 12, A0)
+    assert normalize_stream(a, BASE, HI_RANGE, None).norm != \
+        normalize_stream(c, BASE, HI_RANGE, None).norm
+
+
+class FakeElf:
+    def __init__(self, entry, code, symbols=()):
+        self.entry = entry
+        self.code = code
+        self.symbols = list(symbols)
+
+    def section(self, name):
+        return None
+
+    def word(self, addr):
+        k = (addr - self.entry) >> 2
+        return self.code[k] if 0 <= k < len(self.code) else 0
+
+
+class FakeSym:
+    def __init__(self, name, value):
+        self.name = name
+        self.value = value
+
+
+def test_find_gp():
+    e = FakeElf(0x1000, [lui(GP, 0x45), 0, addiu(GP, GP, -0x1000)])
+    assert find_gp(e) == 0x44F000
+    e = FakeElf(0x1000, [lui(GP, 0x45), i_type(0x0D, GP, GP, 0x1234)])
+    assert find_gp(e) == 0x451234
+    # .reginfo wins over the startup code.
+    class Sec:
+        data = struct.pack("<6I", 0, 0, 0, 0, 0, 0x449000)
+
+    e = FakeElf(0x1000, [lui(GP, 0x45), addiu(GP, GP, -0x1000)])
+    e.section = lambda name: Sec if name == ".reginfo" else None
+    assert find_gp(e) == 0x449000
+    # A register rewritten by another instruction loses its constant.
+    e = FakeElf(0x1000, [lui(A0, 0x45), i_type(0x0C, A0, A0, 0xFF),
+                         r_type(0x2D, A0, 0, GP)])
+    assert scan_gp(e) is None
+    # The scan stops at the first call.
+    e = FakeElf(0x1000, [lui(A0, 0x45), jal(0x2000), 0, r_type(0x2D, A0, 0, GP)])
+    assert scan_gp(e) is None
+    # Built in a scratch register and moved into gp, as the entry stub does.
+    e = FakeElf(0x1000, [lui(A0, 0x45), 0, addiu(A0, A0, -0x7D90), lui(A1, 0x10),
+                         r_type(0x2D, A0, 0, GP)])
+    assert find_gp(e) == 0x448270
+    # A move from a register with no known value does not count.
+    assert find_gp(FakeElf(0x1000, [r_type(0x2D, A0, 0, GP)])) is None
+    e = FakeElf(0x1000, [0] * 4, [FakeSym("_gp", 0x123450)])
+    assert find_gp(e) == 0x123450
+    assert find_gp(FakeElf(0x1000, [0] * 4)) is None
+    # addiu before the lui does not count.
+    assert find_gp(FakeElf(0x1000, [addiu(GP, GP, 4), lui(GP, 0x45)])) is None
+
+
 def run_tool(*args):
     env = dict(os.environ, PYTHONPATH=TOOLS)
     r = subprocess.run([sys.executable, "-m", "regionmap", *args], env=env, cwd=ROOT,
@@ -132,16 +297,57 @@ def run_tool(*args):
     return r.stdout
 
 
+def test_real_normalize():
+    us, jp = ElfFile(US), ElfFile(JP)
+    gps = []
+    for elf in (us, jp):
+        gp = find_gp(elf)
+        assert gp is not None
+        # The startup scan and .reginfo must agree.
+        assert scan_gp(elf) == gp
+        gps.append(gp)
+    print("gp: us=%08X jp=%08X delta=%+#x" % (gps[0], gps[1], gps[1] - gps[0]))
+
+    # Normalizing a chunk on its own must equal the same slice of the whole
+    # stream, i.e. no state leaks across function boundaries.
+    hi_range = hi_range_for(image_bounds(us, jp))
+    whole = text_stream(us, hi_range, gps[0])
+    lo, hi = us.text_ranges()[0]
+    with open(os.path.join(ROOT, "config", "ida_db.json")) as fp:
+        funcs = json.load(fp)["functions"]
+    total = bad = 0
+    for f in funcs:
+        for a, b in f["chunks"]:
+            if a < lo or b > hi or b <= a:
+                continue
+            total += 1
+            alone = normalize_stream(read_words(us, a, b), a, hi_range, gps[0])
+            i = whole.index(a)
+            if alone.norm != whole.norm[i:i + (b - a) // 4]:
+                bad += 1
+    print("standalone chunks differing from whole stream: %d of %d" % (bad, total))
+    assert total > 1000 and bad <= 5, (bad, total)
+
+
 def test_real_binaries():
     out = tempfile.mkdtemp()
     try:
         text = run_tool("build", US, JP, "--out", out)
         assert "elapsed" in text
+        norm_lines = [l for l in text.splitlines() if l.startswith("normalize ")]
+        assert len(norm_lines) == 2, text
+        for l in norm_lines:
+            m = re.match(r"normalize \S+: \d+ words, call=(\d+) lui=(\d+) abs=(\d+) "
+                         r"gp=(\d+) masked, gp=([0-9A-F]{8}), ([\d.]+) s$", l)
+            assert m, l
+            assert all(int(m.group(k)) > 0 for k in (1, 2, 3, 4)), l
+            assert float(m.group(6)) <= 10.0, l
         path = os.path.join(out, "regionmap.json")
         m = RegionMap.load(path)
         m.validate()
         assert m.us_info["file"] == "SLUS_208.51" and m.jp_info["file"] == "SLPS_254.18"
         assert len(m.us_info["sha256"]) == 64
+        assert m.us_info["gp"] and m.jp_info["gp"]
 
         secs = {s["name"]: s for s in m.sections}
         for name in (".text", ".vutext", ".data", ".rodata", ".sdata", ".sbss", ".bss"):
@@ -173,8 +379,11 @@ def test_real_binaries():
 test_merge_ranges()
 test_validate_translate()
 test_json_roundtrip()
+test_normalize_synthetic()
+test_find_gp()
 
 if os.path.isfile(US) and os.path.isfile(JP):
+    test_real_normalize()
     test_real_binaries()
     print("PASS: regionmap (synthetic + real binaries)")
 else:

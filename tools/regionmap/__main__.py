@@ -10,8 +10,9 @@ if __package__ in (None, ""):
 import paths
 from ps2recomp.elf import ElfFile
 
-from .common import file_info, pair_sections
+from .common import file_info, image_bounds, pair_sections
 from .mapfile import Range, RegionMap, Uncertain
+from .normalize import find_gp, hi_range_for, text_stream
 
 
 def _load_elf(path, label):
@@ -54,7 +55,23 @@ def cmd_build(args, log=print):
             uncertain.append(Uncertain(p.us_start + common, p.us_end, p.name,
                                        [delta], "size differs"))
 
-    rmap = RegionMap(file_info(us), file_info(jp), [_section_dict(p) for p in pairs],
+    # Both streams use the union image bounds so the lui window is identical.
+    hi_range = hi_range_for(image_bounds(us, jp))
+    us_info, jp_info = file_info(us), file_info(jp)
+    for elf, info in ((us, us_info), (jp, jp_info)):
+        t1 = time.time()
+        gp = find_gp(elf)
+        if gp is None:
+            log("warning: no gp found in %s; gp-relative words are not masked"
+                % info["file"])
+        info["gp"] = gp
+        st = text_stream(elf, hi_range, gp)
+        log("normalize %s: %d words, call=%d lui=%d abs=%d gp=%d masked, gp=%s, %.1f s"
+            % (info["file"], len(st.raw), st.stats["call"], st.stats["lui"],
+               st.stats["abs"], st.stats["gp"],
+               "%08X" % gp if gp is not None else "none", time.time() - t1))
+
+    rmap = RegionMap(us_info, jp_info, [_section_dict(p) for p in pairs],
                      ranges, uncertain, [], {})
     rmap.validate()
     path = os.path.join(args.out, "regionmap.json")
