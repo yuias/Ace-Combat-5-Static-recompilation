@@ -117,7 +117,8 @@ target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${Vulkan_INCLUDE_DIRS})
 target_link_libraries(ac5 PRIVATE Threads::Threads m
                                   SDL3::SDL3 Vulkan::Vulkan lua54)
-target_link_options(ac5 PRIVATE -static-libstdc++)
+# -static-libgcc makes clang link libunwind statically, so no libunwind.dll.
+target_link_options(ac5 PRIVATE -static-libstdc++ -static-libgcc)
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
 set(GEN_COMPILE_OPTIONS "${GEN_OPT}")
@@ -161,7 +162,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             ${Vulkan_INCLUDE_DIRS})
 target_link_libraries(gsreplay PRIVATE Threads::Threads m
                                        SDL3::SDL3 Vulkan::Vulkan)
-target_link_options(gsreplay PRIVATE -static-libstdc++)
+target_link_options(gsreplay PRIVATE -static-libstdc++ -static-libgcc)
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)
 endif()
