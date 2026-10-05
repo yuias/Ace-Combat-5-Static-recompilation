@@ -4,6 +4,7 @@
 #include "ps2_modapi.h"
 #include "ps2_params.h"
 #include "ps2_patch.h"
+#include "ps2_region.h"
 #include "ps2_vfs.h"
 
 #include <limits.h>
@@ -688,7 +689,7 @@ const ac5_api *ps2_modapi_for(const char *mod_id, int priority,
     m->config_get = config_get;
 
     m->api.abi_version = AC5_ABI_VERSION;
-    m->api.game_id = "SLUS-20851";
+    m->api.game_id = ps2_game_id;
     m->api.mod_id = m->id;
     m->api.priority = priority;
     m->api.log = api_log;

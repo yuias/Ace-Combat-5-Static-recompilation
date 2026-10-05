@@ -104,7 +104,7 @@ enum { AC5_PATCH_ONCE = 0, AC5_PATCH_ALWAYS = 1, AC5_PATCH_BOTH = 2 };
 
 struct ac5_api {
     uint32_t abi_version;               /* AC5_ABI_VERSION                   */
-    const char *game_id;                /* "SLUS-20851"                      */
+    const char *game_id;                /* "SLUS-20851" or "SLPS-25418"      */
     const char *mod_id;                 /* this mod's directory name         */
     int32_t priority;                   /* from its mod.toml                 */
 

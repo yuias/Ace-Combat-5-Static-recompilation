@@ -5,6 +5,7 @@
 #include "ps2_modapi.h"
 #include "ps2_params.h"
 #include "ps2_patch.h"
+#include "ps2_region.h"
 #include "ps2_vfs.h"
 
 #include <limits.h>
@@ -392,10 +393,10 @@ static void requirements_resolve(void) {
             snprintf(why, sizeof why, "it needs mod ABI %d, and this runtime "
                      "has %d", m->abi, AC5_ABI_VERSION);
             switch_off(m, why);
-        } else if (m->game[0] && strcmp(m->game, "SLUS-20851")) {
+        } else if (m->game[0] && strcmp(m->game, ps2_game_id)) {
             char why[200];
-            snprintf(why, sizeof why, "it is for %s, and this is SLUS-20851",
-                     m->game);
+            snprintf(why, sizeof why, "it is for %s, and this is %s",
+                     m->game, ps2_game_id);
             switch_off(m, why);
         } else if (requires_each(m, NULL, NULL) < 0) {
             switch_off(m, "its requires line is malformed -- write it as "
@@ -469,7 +470,9 @@ void ps2_mod_init(void) {
     DIR *d;
     struct dirent *e;
     u32 enabled = 0, files = 0;
-    symbols_load("config/game_symbols.txt", NULL);
+    char symfile[PATH_MAX];
+    symbols_load(ps2_region_config_path("game_symbols.txt", symfile,
+                                        sizeof symfile), NULL);
     if (getenv("PS2_NO_MODS")) {
         mods_off = 1;
         ps2_log("mod: disabled by PS2_NO_MODS");
