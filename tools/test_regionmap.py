@@ -13,7 +13,7 @@ sys.path.insert(0, TOOLS)
 
 from ps2recomp.elf import ElfFile
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
-from regionmap.codematch import CodeMatcher, Unit, load_units
+from regionmap.codematch import CodeMatcher, Unit, _clear, load_units
 from regionmap.mapfile import merge_ranges
 from regionmap.common import image_bounds
 from regionmap.common import words as read_words
@@ -42,9 +42,13 @@ def test_merge_ranges():
             Range(0x10, 0x20, 8, ".text", "diff", "medium"),
             Range(0x40, 0x50, 8, ".text", "func", "high")]
     out = merge_ranges(rows)
-    assert [(r.us_start, r.us_end) for r in out] == [(0x10, 0x30), (0x40, 0x50)]
-    assert out[0].source == "diff" and out[0].confidence == "medium"
+    # Touching rows with different confidence stay apart.
+    assert [(r.us_start, r.us_end, r.confidence) for r in out] == \
+        [(0x10, 0x20, "medium"), (0x20, 0x30, "high"), (0x40, 0x50, "high")]
     assert rows[1].us_end == 0x20, "input rows must not be mutated"
+    out = merge_ranges([Range(0, 8, 4, ".text", "diff", "medium"),
+                        Range(8, 16, 4, ".text", "diff", "medium")])
+    assert [(r.us_start, r.us_end) for r in out] == [(0, 16)]
 
     # Same delta but a different section does not merge.
     out = merge_ranges([Range(0, 8, 4, ".a", "func", "high"),
@@ -315,21 +319,26 @@ def test_exact_pass_synthetic():
     assert (ua.status, ua.jp, ua.confidence) == ("same", 0x2000, 1.0), ua
     assert (ub.status, ub.jp, ub.confidence) == ("same", 0x2020, 0.95), ub
     assert (uc.status, uc.jp) == ("same", 0x2038) and ud.jp == 0x2054
-    assert uz.status == "unmatched" and uz.jp is None   # below MIN_EXACT_WORDS
+    # Below MIN_EXACT_WORDS, so only the gap diff can place it.
+    assert (uz.status, uz.method, uz.jp, uz.jp_end) == ("same", "diff", 0x2064, 0x206C), uz
 
     rows = [(r.us_start, r.us_end, r.delta) for r in cm.code_ranges()]
-    # B, C, the padding between C and D, and D share one shift and merge.
-    assert rows == [(0x1000, 0x1018, 0x1000), (0x1018, 0x105C, 0x1008)], rows
+    # B, C, the padding between C and D, D and the tail chunk share one shift and merge.
+    assert rows == [(0x1000, 0x1018, 0x1000), (0x1018, 0x1064, 0x1008)], rows
     assert cm.code_translate(0x1018) == 0x2020 and cm.code_translate(0x1030) == 0x2038
-    assert cm.code_translate(0x105C) is None and cm.code_translate(0xFFF) is None
+    assert cm.code_translate(0x1064) is None and cm.code_translate(0xFFF) is None
     assert list(cm.aligned_pairs())[:2] == [(0, 0), (1, 1)]
 
     fns = {f.name: f for f in cm.functions()}
     assert fns["fa"].status == "same" and fns["fa"].chunks == []
-    # A non-main chunk that is not matched downgrades a matched main chunk.
-    assert fns["fb"].status == "body-changed" and fns["fb"].jp == 0x2020
+    assert fns["fb"].status == "same" and fns["fb"].jp == 0x2020
     assert fns["fb"].chunks == [[0x1018, 0x1030, 0x2020, "same"],
-                                [0x105C, 0x1064, None, "unmatched"]], fns["fb"].chunks
+                                [0x105C, 0x1064, 0x2064, "same"]], fns["fb"].chunks
+    # A non-main chunk that is not matched downgrades a matched main chunk.
+    _clear(cm.units[4])
+    fns = {f.name: f for f in cm.functions()}
+    assert fns["fb"].status == "body-changed" and fns["fb"].jp == 0x2020
+    assert fns["fb"].chunks[1] == [0x105C, 0x1064, None, "unmatched"], fns["fb"].chunks
 
     # Link order: a unit placed before the end of the previously accepted one
     # is dropped. Walking the units out of US order forces that case.
@@ -385,7 +394,7 @@ def test_reference_propagation():
     assert (s.status, s.method, s.jp, s.jp_end, s.confidence) == \
         ("same", "call", 0x2038, 0x2040, 0.9), s
     # Raw-equal gap between two units at the same shift: the stub in it is placed.
-    assert (g.status, g.method, g.jp) == ("same", "exact", 0x2058), g
+    assert (g.status, g.method, g.jp) == ("same", "diff", 0x2058), g
     # The call to fb disagrees with fb's own placement.
     assert cm.stats["call_conflicts"] == 1 and cm.stats["call_pairs_checked"] == 2, cm.stats
     assert cm.conflicts == [(0x1008, 0x1018, 0x2020, 0x2060)], cm.conflicts
@@ -402,23 +411,96 @@ def test_reference_propagation():
     # A target before the previous matched unit's end breaks link order.
     us, jp = ref_streams(jp_s_target=0x2010)
     cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
-    cm.run()
+    cm.match_exact()
+    cm.propagate_refs()
     assert cm.units[2].status == "unmatched" and cm.units[2].note == "call target out of order"
 
     # Two call sites naming different targets leave the stub unmatched.
     us, jp = ref_streams(jp_extra={3: (REF_CALL, 0x2040)})
     us.refs[3] = (REF_CALL, 0x1030)
     cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
-    cm.run()
+    cm.match_exact()
+    cm.propagate_refs()
     assert cm.units[2].status == "unmatched" and cm.units[2].note == "call targets disagree"
 
-    # A located unit never survives run().
+    # A located unit never survives run(): the gap diff resolves it, here as a
+    # half-matching body that keeps the call-derived start.
     us, jp = ref_streams()
     jp.norm[14] = 0x999
     cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
     cm.run()
-    assert cm.units[2].status == "unmatched" and cm.units[2].note == "located but not resolved"
-    assert cm.stats["located"] == 1
+    s = cm.units[2]
+    assert (s.status, s.method, s.jp, s.jp_end, s.similarity) == \
+        ("body-changed", "call", 0x2038, 0x2040, 0.5), s
+    assert s.blocks == [(1, 1, 1)] and cm.stats["located"] == 1
+    # With nothing in common the unit stays unmatched and says where it looked.
+    jp.norm[15] = 0x998
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.run()
+    s = cm.units[2]
+    assert s.status == "unmatched" and s.note == "best guess jp=00002038 ratio=0.00", s
+
+
+def test_gap_diff_synthetic():
+    seq = lambda hi, n: [hi + k for k in range(n)]
+    w = lambda i: 0x1000 + 4 * i
+    a, b, c, d = seq(0x110, 6), seq(0x120, 6), seq(0x130, 6), seq(0x140, 6)
+    short = [0x300, 0x301]           # below MIN_EXACT_WORDS, unchanged
+    gone = seq(0x400, 5)             # exists only in US
+    # JP inserts two words into B, so B is not found by the exact pass.
+    us = plain_stream(0x1000, a + short + gone + b + c + d)
+    jp = plain_stream(0x2000, a + short + b[:3] + [0x7001, 0x7002] + b[3:] + c + d)
+    units = [Unit(w(0), w(6), w(0), "fa", True), Unit(w(6), w(8), w(6), "short", True),
+             Unit(w(8), w(13), w(8), "gone", True), Unit(w(13), w(19), w(13), "fb", True),
+             Unit(w(19), w(25), w(19), "fc", True), Unit(w(25), w(31), w(25), "fd", True)]
+    cm = CodeMatcher(us, jp, units, log=lambda *x: None)
+    cm.run()
+    ua, ushort, ugone, ub, uc, ud = cm.units
+    assert (ua.status, ua.method) == ("same", "exact") and uc.method == "exact"
+    assert (ushort.status, ushort.method, ushort.confidence) == ("same", "diff", 0.9), ushort
+    assert (ushort.jp, ushort.jp_end) == (0x2018, 0x2020), ushort
+    assert ub.status == "body-changed" and ub.method == "diff", ub
+    assert 0.5 < ub.similarity < 1 and ub.jp == 0x2020 and ub.jp_end == 0x2040, ub
+    assert ub.blocks == [(0, 0, 3), (3, 5, 3)], ub.blocks
+    assert (ugone.status, ugone.note, ugone.jp) == ("unmatched", "deleted", None), ugone
+    # Equal blocks of the changed unit are mapped, the inserted words are not.
+    assert cm.code_translate(w(14)) == w(14) + 0x1000 - 0x14
+    assert cm.code_translate(w(17)) == w(17) + 0x1000 - 0x14 + 8
+    assert cm.code_translate(w(10)) is None
+    pairs = list(cm.aligned_pairs())
+    assert (13, 8) in pairs and (16, 13) in pairs and (16, 11) not in pairs
+
+    # A gap larger than the limit is reported and left unmatched.
+    import regionmap.codematch as codematch
+    saved, codematch.MAX_GAP_WORDS = codematch.MAX_GAP_WORDS, 4
+    try:
+        logged = []
+        cm = CodeMatcher(us, jp, [Unit(w(k), w(k + 1), w(k), "f%d" % k, True)
+                                  for k in (8, 14)], log=logged.append)
+        cm.run()
+        assert all(u.note == "gap too large" for u in cm.units), [u.note for u in cm.units]
+        assert logged and "gap too large" in logged[0] and cm.stats["gaps_too_large"] >= 1
+    finally:
+        codematch.MAX_GAP_WORDS = saved
+
+
+def test_trim_conflicting_calls():
+    # Equal blocks pair calls through masked targets. A call whose JP target is
+    # not the placed JP address of the US target splits the block.
+    words = [1, 2, 0x0C000000, 4, 5, 6, 7, 8, 20, 21, 22, 23]
+    us = Stream(0x1000, list(words), list(words), {2: (REF_CALL, 0x1020)}, {})
+    jp = Stream(0x2000, words + [0] * 8, words + [0] * 8, {2: (REF_CALL, 0x2040)}, {})
+    x = Unit(0x1000, 0x1020, 0x1000, "x", True, 0x2000, 0x2020, "body-changed", "diff",
+             0.9, 0.9, "", [(0, 0, 8)])
+    f = Unit(0x1020, 0x1030, 0x1020, "f", True, 0x2020, 0x2030, "same", "exact", 1.0, 1.0)
+    cm = CodeMatcher(us, jp, [x, f], log=lambda *a: None)
+    cm._trim_blocks()
+    assert x.blocks == [(0, 0, 2), (3, 3, 5)], x.blocks
+    # With an agreeing target nothing is split.
+    jp.refs[2] = (REF_CALL, 0x2020)
+    x.blocks = [(0, 0, 8)]
+    cm._trim_blocks()
+    assert x.blocks == [(0, 0, 8)]
 
 
 def test_padding_and_chunk_confidence():
@@ -429,7 +511,8 @@ def test_padding_and_chunk_confidence():
     b = Unit(0x1010, 0x1018, 0x1010, "b", True, 0x2010, 0x2018, "body-changed", "diff", 0.7, 0.7)
     c = Unit(0x1020, 0x1030, 0x1020, "c", True, 0x2020, 0x2030, "same", "exact", 1.0, 1.0)
     cm = CodeMatcher(us, jp, [a, b, c], log=lambda *x: None)
-    assert [(r.us_start, r.us_end) for r in cm.code_ranges()] ==         [(0x1000, 0x1010), (0x1018, 0x1030)]
+    assert [(r.us_start, r.us_end) for r in cm.code_ranges()] == \
+        [(0x1000, 0x1010), (0x1018, 0x1030)]
 
     # A downgraded function carries the lowest chunk confidence.
     t = Unit(0x1030, 0x1038, 0x1000, "a", False, status="unmatched")
@@ -546,6 +629,7 @@ def test_real_binaries():
         assert mc, code[0]
         nfunc, same, bc, un = (int(mc.group(k)) for k in (1, 3, 4, 5))
         assert same >= 6000 and same + bc + un == nfunc, code[0]
+        assert float(mc.group(6)) <= 30.0, code[0]
         assert len(m.functions) == nfunc
         calls = [l for l in text.splitlines() if l.startswith("calls: ")]
         mk = re.match(r"calls: (\d+) pairs checked, (\d+) conflicts \(([\d.]+)%\); "
@@ -553,8 +637,16 @@ def test_real_binaries():
                       calls[0] if calls else "")
         assert mk, text
         pairs, conflicts = int(mk.group(1)), int(mk.group(2))
-        assert pairs > 1000 and conflicts * 200 <= pairs, calls[0]
+        assert pairs > 1000 and conflicts == 0, calls[0]
+        # These two sites sit in changed bodies and pair a call to another function.
+        assert m.translate(0x2F00F0) in (None, 0x2F03BC), hex(m.translate(0x2F00F0) or 0)
+        assert m.translate(0x2F85D8) in (None, 0x2F8904), hex(m.translate(0x2F85D8) or 0)
+        # 764 is the unmatched count of the exact pass alone.
         assert un < 764, code[0]
+        assert un <= 150, code[0]
+        for f in m.functions:
+            if f.status != "same":
+                assert f.note or f.similarity > 0, f
         assert m.translate(0x31C138) == 0x31C460
         entry = run_tool("lookup", path, "0x31C138").split()
         assert entry[:4] == ["0031C138", "->", "0031C460", ".text"] and entry[4] == "same"
@@ -569,6 +661,8 @@ test_normalize_synthetic()
 test_find_gp()
 test_exact_pass_synthetic()
 test_reference_propagation()
+test_gap_diff_synthetic()
+test_trim_conflicting_calls()
 test_padding_and_chunk_confidence()
 test_load_units()
 

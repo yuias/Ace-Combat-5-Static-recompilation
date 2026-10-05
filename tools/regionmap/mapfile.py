@@ -45,9 +45,10 @@ class FuncMatch:
 
 
 def merge_ranges(ranges: List[Range]) -> List[Range]:
-    """Sort; merge touching/overlapping rows with equal delta and section
-    (keep the lower confidence, source of the first). Overlap with a different
-    delta raises ValueError."""
+    """Sort; merge overlapping rows with equal delta and section (keep the lower
+    confidence, source of the first), and touching rows that also share source
+    and confidence, so one low-confidence block does not downgrade its
+    neighbours. Overlap with a different delta raises ValueError."""
     out: List[Range] = []
     for r in sorted((x for x in ranges if x.us_start < x.us_end),
                     key=lambda x: (x.us_start, x.us_end)):
@@ -58,8 +59,10 @@ def merge_ranges(ranges: List[Range]) -> List[Range]:
                     "conflicting overlap: %08X-%08X delta %+#x %s vs %08X-%08X delta %+#x %s"
                     % (cur.us_start, cur.us_end, cur.delta, cur.section,
                        r.us_start, r.us_end, r.delta, r.section))
-        if (out and r.us_start <= out[-1].us_end
-                and r.delta == out[-1].delta and r.section == out[-1].section):
+        if (out and r.delta == out[-1].delta and r.section == out[-1].section
+                and (r.us_start < out[-1].us_end
+                     or (r.us_start == out[-1].us_end and r.source == out[-1].source
+                         and r.confidence == out[-1].confidence))):
             cur = out[-1]
             cur.us_end = max(cur.us_end, r.us_end)
             if CONFIDENCE_ORDER[r.confidence] < CONFIDENCE_ORDER[cur.confidence]:
