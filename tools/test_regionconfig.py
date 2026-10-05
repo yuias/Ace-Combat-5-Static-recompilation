@@ -11,7 +11,7 @@ ROOT = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 
 from ps2recomp.elf import ElfFile
-from regionconfig import idadb, seeds
+from regionconfig import idadb, refs, seeds
 from regionconfig.__main__ import HANDLERS, generate, run_check, run_translate, verify_inputs
 from regionconfig.core import Translator, fmt_like
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
@@ -22,9 +22,13 @@ US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
 JP = os.path.join(ROOT, "tmp", "jp", "SLPS_254.18")
 CONFIG = os.path.join(ROOT, "config")
 
-# The synthetic tests have no ida_db.json or ida_seeds.json source or ELF, so they
-# skip those handlers.
-SYMBOL_HANDLERS = [h for h in HANDLERS if h not in (idadb.handle, seeds.handle)]
+REF_HANDLERS = [refs.handle_render_emitters, refs.handle_rpc_sids, refs.handle_syscalls_used]
+REF_FILES = ("render_emitters.json", "rpc_sids.json", "ac5_syscalls_used.json")
+
+# The synthetic tests have no ida_db.json, ida_seeds.json or reference-config
+# source or ELF, so they skip those handlers.
+SYMBOL_HANDLERS = [h for h in HANDLERS
+                   if h not in [idadb.handle, seeds.handle] + REF_HANDLERS]
 
 SYMBOL_FILES = ("hooks.json", "overrides.json", "manual_symbols.json",
                 "sdk_symbols.json", "game_symbols.txt")
@@ -689,6 +693,101 @@ def test_real_seeds_identity():
     assert outputs["ida_seeds.json"].endswith(b"\n") == raw.endswith(b"\n")
 
 
+def emitter(sites, ancestors=()):
+    return {"ancestors": [{"func": f, "level": 2, "name": "n"} for f in ancestors],
+            "direct": False, "helper_2d": False, "name": None,
+            "sites": [{"bucket": i, "site": a} for i, a in enumerate(sites)], "size": 8}
+
+
+def test_refs_handlers():
+    root = tempfile.mkdtemp()
+    try:
+        # 0x104 -> 0x114; 0x140 -> 0x150; 0x210 is uncertain; 0x500 is outside.
+        emitters = {"00000104": emitter(["00000108", "00000210"], ["00000140", "00000500"]),
+                    "00000140": emitter(["00000144"]),
+                    "00000210": emitter(["00000108"]),
+                    "00000100": emitter([])}
+        doc = {"binary": "SLUS_208.51", "classes_with_vtables": 2,
+               "emitters": dict(sorted(emitters.items())),
+               "virtual_methods": {"00000100": ["A::vf0"], "00000140": ["A::vf1", "B::vf1"],
+                                   "00000500": ["C::vf0"]}}
+        write(os.path.join(root, "render_emitters.json"), json.dumps(doc, indent=1))
+        rpc = {"bind": [{"site": "0x104", "fn": "0x100", "sid": "0x80000210"},
+                        {"site": "0x210", "fn": "0x100", "sid": "0x80000001"}],
+               "call": [{"site": "0x108", "fn": "0x140", "fno": "0x2"},
+                        {"site": "0x108", "fn": "0x500", "fno": None},
+                        {"site": "0x140", "fn": "0x100", "fno": None}]}
+        write(os.path.join(root, "rpc_sids.json"), json.dumps(rpc, indent=1))
+        sysc = {"60": {"names": ["RFU060"], "sites": ["00000104"]},
+                "7": {"names": [], "sites": ["00000500", "00000210"]},
+                "35": {"names": ["X"], "sites": ["00000140", "00000108"]}}
+        write(os.path.join(root, "ac5_syscalls_used.json"), json.dumps(sysc, indent=1))
+
+        tr = Translator(synthetic_map(), None, None)
+        outputs = generate(tr, REF_HANDLERS, root, lambda *a: None)
+        assert outputs is not None and not tr.failures
+        em = json.loads(outputs["render_emitters.json"])
+        assert list(em) == ["binary", "classes_with_vtables", "emitters", "virtual_methods"]
+        assert em["binary"] == "SLPS_254.18"
+        assert list(em["emitters"]) == ["00000110", "00000114", "00000150"], "sorted keys"
+        e = em["emitters"]["00000114"]
+        assert [x["site"] for x in e["sites"]] == ["00000118"] and e["sites"][0]["bucket"] == 0
+        assert e["ancestors"] == [{"func": "00000150", "level": 2, "name": "n"}]
+        assert e["size"] == 8
+        assert list(em["virtual_methods"]) == ["00000110", "00000150"]
+        assert em["virtual_methods"]["00000150"] == ["A::vf1", "B::vf1"]
+        r = json.loads(outputs["rpc_sids.json"])
+        assert r["bind"] == [{"site": "0x114", "fn": "0x110", "sid": "0x80000210"}]
+        assert r["call"] == [{"site": "0x118", "fn": "0x150", "fno": "0x2"},
+                             {"site": "0x150", "fn": "0x110", "fno": None}]
+        y = json.loads(outputs["ac5_syscalls_used.json"])
+        assert list(y) == ["60", "7", "35"], "US key order"
+        assert y == {"60": {"names": ["RFU060"], "sites": ["00000114"]},
+                     "7": {"names": [], "sites": []},
+                     "35": {"names": ["X"], "sites": ["00000150", "00000118"]}}
+        assert not outputs["render_emitters.json"].endswith(b"\n"), "like the US file"
+        man = json.loads(outputs["manifest.json"])
+        assert man["files"]["render_emitters.json"] == {"kept": 8, "dropped": 4, "rederived": 0}
+        assert man["files"]["rpc_sids.json"] == {"kept": 3, "dropped": 2, "rederived": 0}
+        assert man["files"]["ac5_syscalls_used.json"] ==             {"kept": 3, "dropped": 2, "rederived": 0}
+        d = {(x["file"][:5], x["where"]): x["reason"] for x in man["dropped"]}
+        assert d[("rende", "emitters:0x00000104/site:0x00000210")].startswith("uncertain")
+        assert d[("rende", "emitters:0x00000104/ancestor:0x00000500")] ==             "outside every mapped range"
+        assert ("rende", "emitters:0x00000210") in d
+        assert ("rende", "virtual_methods:0x00000500") in d
+        assert ("rpc_s", "bind:0x00000210") in d
+        assert d[("rpc_s", "call:0x00000108")] == "fn 0x00000500: outside every mapped range"
+        assert ("ac5_s", "sites[7]:0x00000500") in d
+
+        # Two emitters that map onto one JP address: the later one is dropped.
+        doc2 = {"binary": "SLUS_208.51", "classes_with_vtables": 0,
+                "emitters": {"00000180": emitter([]), "00000198": emitter([])},
+                "virtual_methods": {}}
+        write(os.path.join(root, "render_emitters.json"), json.dumps(doc2, indent=1))
+        tr = Translator(synthetic_map(), None, None)
+        assert generate(tr, [refs.handle_render_emitters], root, lambda *a: None) is not None
+        # 0x180 is placed at 0x1A8 by its match, and 0x198 maps there by range.
+        assert [(e.where, e.text) for e in tr.dropped] == [
+            ("emitters:0x00000198", "maps onto 0x000001A8, already taken")]
+    finally:
+        shutil.rmtree(root)
+
+
+def test_real_refs_identity():
+    us = ElfFile(US)
+    rmap = identity_map(US, os.path.join(CONFIG, "ida_db.json"))
+    tr = Translator(rmap, us, us)
+    outputs = generate(tr, REF_HANDLERS, CONFIG, lambda *a: None)
+    assert outputs is not None and not tr.failures
+    assert not tr.dropped and not tr.rederived, tr.dropped[:3]
+    for name in REF_FILES:
+        with open(os.path.join(CONFIG, name), "rb") as fp:
+            raw = fp.read()
+        if name == "render_emitters.json":
+            raw = raw.replace(b'"binary": "SLUS_208.51"', b'"binary": "SLPS_254.18"')
+        assert outputs[name] == raw, name
+
+
 def test_real_pair():
     from regionconfig.__main__ import main
     root = tempfile.mkdtemp()
@@ -779,11 +878,13 @@ test_ida_functions_and_names()
 test_switch_logic()
 test_seeds_logic()
 test_seeds_handler()
+test_refs_handlers()
 
 if os.path.isfile(US):
     test_real_identity()
     test_real_ida_identity()
     test_real_seeds_identity()
+    test_real_refs_identity()
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_pair()
     print("PASS: regionconfig (synthetic + real binaries)")
