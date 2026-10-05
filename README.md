@@ -12,7 +12,7 @@ There's no game code or assets in this repo. You bring your own copy of the game
 
 ## What you need
 
-- **The game.** The US release, serial SLUS-20851, as an ISO or as the extracted disc files. The config files in `config/` are tied to addresses in the US executable, so a disc from another region doesn't work with them. The Japanese release (SLPS-25418) has its own config set and its own section further down, but it isn't playable yet.
+- **The game.** The US release, serial SLUS-20851, as an ISO or as the extracted disc files. The config files in `config/` are tied to addresses in the US executable, so a disc from another region doesn't work with them. The Japanese release (SLPS-25418) has its own config set and its own section further down. It boots and reaches a mission, but it hasn't been played through yet.
 - **64-bit Windows** and a GPU with a Vulkan driver. I build and play on Windows 10.
 - **Clang and SDL3** come from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and the SDL3 mingw development package. You don't install them yourself: the build script in step 4 downloads both into `deps/` (git-ignored) the first time it runs. The generated code relies on guaranteed tail calls (`musttail`), which Clang provides.
 - **CMake** 3.20 or newer, and **Ninja** (`pip install ninja` is the easiest way to get it).
@@ -196,7 +196,7 @@ Next time the game draws something with the VU1, the log should get a line like 
 
 ## Japanese release (SLPS-25418)
 
-The Japanese release has its own config set in `config/slps-25418/`. The recompiler and the build work with it, but the game isn't playable yet: the runtime still uses the US addresses for its own hooks and patches, so a JP build doesn't run correctly. Treat this as a build target for now.
+The Japanese release has its own config set in `config/slps-25418/`. The runtime's own hooks and patches take their addresses from `runtime/include/ps2_addr_list.h`, which lists the US addresses; `python -m regionaddr generate` translates them for JP into `runtime/include/ps2_addr_jp.inc`, and a JP build checks the expected code at those addresses when it starts. A JP build boots and reaches a mission, but it hasn't been played through yet, so expect rough edges. Note that the JP release confirms with Circle and cancels with Cross.
 
 The executable is `SLPS_254.18` in the root of the disc. The check is the same as in step 1:
 
