@@ -19,15 +19,8 @@ option(PS2_DIAG "compile the entry histogram and the guest-store watch in" OFF)
 find_package(Threads REQUIRED)
 
 find_package(Vulkan REQUIRED)
-# SDL3's CMake package (official devel archives, -DSDL3_DIR=...) first;
-# pkg-config covers the MSYS2 packages.
-find_package(SDL3 CONFIG QUIET)
-if(SDL3_FOUND)
-  set(SDL3_LIBRARIES SDL3::SDL3)
-else()
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(SDL3 REQUIRED sdl3)
-endif()
+# The SDL3 mingw devel package from tools/build-clang.ps1 (-DSDL3_DIR=...).
+find_package(SDL3 CONFIG REQUIRED)
 
 set(PS2_GENERATED_DIR "generated" CACHE STRING
     "recompiler output directory, relative to the source tree")
@@ -121,11 +114,10 @@ list(APPEND RUNTIME_SOURCES ${IMGUI_SOURCES})
 add_executable(ac5 ${RUNTIME_SOURCES} ${GENERATED_SOURCES})
 target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${IMGUI_DIR} ${IMGUI_DIR}/backends
-                                       ${SDL3_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS})
-target_link_directories(ac5 PRIVATE ${SDL3_LIBRARY_DIRS})
+                                       ${Vulkan_INCLUDE_DIRS})
 target_link_libraries(ac5 PRIVATE Threads::Threads m
-                                  ${SDL3_LIBRARIES} Vulkan::Vulkan lua54)
-target_link_options(ac5 PRIVATE -static-libstdc++ -static-libgcc)
+                                  SDL3::SDL3 Vulkan::Vulkan lua54)
+target_link_options(ac5 PRIVATE -static-libstdc++)
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
 set(GEN_COMPILE_OPTIONS "${GEN_OPT}")
@@ -166,12 +158,10 @@ add_executable(gsreplay ${REPLAY_SOURCES})
 target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             "${LUA_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
-                                            ${SDL3_INCLUDE_DIRS}
                                             ${Vulkan_INCLUDE_DIRS})
-target_link_directories(gsreplay PRIVATE ${SDL3_LIBRARY_DIRS})
 target_link_libraries(gsreplay PRIVATE Threads::Threads m
-                                       ${SDL3_LIBRARIES} Vulkan::Vulkan)
-target_link_options(gsreplay PRIVATE -static-libstdc++ -static-libgcc)
+                                       SDL3::SDL3 Vulkan::Vulkan)
+target_link_options(gsreplay PRIVATE -static-libstdc++)
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)
 endif()
@@ -206,18 +196,12 @@ add_dependencies(gsreplay shaders)
 
 include(CheckCSourceCompiles)
 set(CMAKE_REQUIRED_FLAGS "-std=c23 -Werror")
-# Same spelling selection as PS2_TAIL in ps2_runtime.h.
 check_c_source_compiles("
-#ifdef __clang__
-#  define TAIL __attribute__((musttail))
-#else
-#  define TAIL [[gnu::musttail]]
-#endif
 void g(void){}
-void f(void){ TAIL return g(); }
+void f(void){ __attribute__((musttail)) return g(); }
 int main(void){ f(); return 0; }" HAVE_MUSTTAIL)
 if(NOT HAVE_MUSTTAIL)
   message(WARNING
     "This compiler has no musttail attribute. Cross-function guest loops will "
-    "consume stack. GCC 15+ or Clang 13+ is required for a correct build.")
+    "consume stack. Clang 13+ is required for a correct build.")
 endif()

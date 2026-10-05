@@ -2,7 +2,7 @@
 
 A static recompilation of **Ace Combat 5: The Unsung War** (PS2, NTSC-U) for Windows.
 
-The game's main CPU code isn't emulated. A Python tool reads the original executable and translates every function into C ahead of time. GCC then compiles that together with a runtime that stands in for the rest of the console: the GS (drawn through Vulkan), the VU vector units, SPU2 audio, the IPU for the movies, the IOP modules, memory cards and controllers. What you get at the end is a normal `ac5.exe`.
+The game's main CPU code isn't emulated. A Python tool reads the original executable and translates every function into C ahead of time. Clang then compiles that together with a runtime that stands in for the rest of the console: the GS (drawn through Vulkan), the VU vector units, SPU2 audio, the IPU for the movies, the IOP modules, memory cards and controllers. What you get at the end is a normal `ac5.exe`.
 
 The graphics are native too. The 3D (the aircraft, the cockpit, terrain, ground objects, the sky and clouds) doesn't go through an emulated Graphics Synthesizer. The vector programs the game runs on the VU1 to transform and light its models have been rewritten as native code, and the geometry is drawn as real GPU meshes, with vertex shaders, mipmapped textures and anisotropic filtering. The flight HUD, the radar and the radio captions are drawn at your window's resolution, so they stay sharp at any size. Whatever the native renderer doesn't cover yet (the menus, the hangar, some effects) still goes through the emulated GS, into the same frame.
 
@@ -14,15 +14,7 @@ There's no game code or assets in this repo. You bring your own copy of the game
 
 - **The game.** The US release, serial SLUS-20851, as an ISO or as the extracted disc files. Other regions won't work because the config files are tied to addresses in the US executable.
 - **64-bit Windows** and a GPU with a Vulkan driver. I build and play on Windows 10.
-- **[MSYS2](https://www.msys2.org)**, for GCC and SDL3. In the MSYS2 UCRT64 shell run:
-
-  ```
-  pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-pkgconf
-  ```
-
-  It has to be GCC 15 or newer. The generated code relies on guaranteed tail calls (`[[gnu::musttail]]`), and with an older compiler you get a CMake warning and an exe that can run out of stack.
-
-  If you'd rather not install MSYS2, there's a Clang build instead, see [Building with Clang](#building-with-clang-no-msys2) under step 4.
+- **Clang and SDL3** come from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and the SDL3 mingw development package. You don't install them yourself: the build script in step 4 downloads both into `deps/` (git-ignored) the first time it runs. The generated code relies on guaranteed tail calls (`musttail`), which Clang provides.
 - **CMake** 3.20 or newer, and **Ninja** (`pip install ninja` is the easiest way to get it).
 - **The [Vulkan SDK](https://vulkan.lunarg.com)**. The build uses its `glslc` to compile the shaders.
 - **Python 3.** Only the standard library is used, there's nothing to pip install. I'm on 3.12.
@@ -49,13 +41,7 @@ Keep the ISO around. The executable is just the code, the game still loads its m
 
 ## Step 2: set up a terminal
 
-Everything from here on is PowerShell, run from the root of this repo. Put MSYS2's UCRT64 `bin` folder at the front of your PATH first, so CMake can find `gcc` and `pkg-config`:
-
-```powershell
-$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
-```
-
-That only applies to the window you're in. Change the path if MSYS2 isn't installed in `C:\msys64`. If you only just installed the Vulkan SDK, open a new terminal so it picks up the `VULKAN_SDK` variable.
+Everything from here on is PowerShell, run from the root of this repo. If you only just installed the Vulkan SDK, open a new terminal so it picks up the `VULKAN_SDK` variable. The build script falls back to the system-wide value if it's missing.
 
 ## Step 3: recompile
 
@@ -96,38 +82,27 @@ If you want to actually read the output, add `--comments`. Every line then gets 
 ## Step 4: build
 
 ```powershell
-cmake -S . -B build/gcc -G Ninja -DCMAKE_BUILD_TYPE=Release `
-    -DCMAKE_C_COMPILER=C:/msys64/ucrt64/bin/gcc.exe `
-    -DCMAKE_CXX_COMPILER=C:/msys64/ucrt64/bin/c++.exe
-cmake --build build/gcc
-```
-
-The shaders get compiled into a `shaders` folder right next to `ac5.exe`, and that's where the game looks for them. If you ever move the exe somewhere else, take that folder with it.
-
-Give it some time. Every generated file is basically one gigantic function and GCC takes its time with them. It takes me 3 to 5 minutes on a 12-thread CPU. There shouldn't be any warnings.
-
-When it's done you'll have:
-
-- `build/gcc/ac5.exe`: the game
-- `build/gcc/shaders/`: the compiled shaders
-- `build/gcc/gsreplay.exe`: a dev tool that replays graphics captures, not needed to play
-
-### Building with Clang (no MSYS2)
-
-`tools/build-clang.ps1` builds with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Clang plus the mingw-w64 runtime) instead of MSYS2's GCC. On the first run it downloads llvm-mingw and the SDL3 mingw development package into `deps/`, which is git-ignored. You still need CMake, Ninja and the Vulkan SDK. From the repo root:
-
-```powershell
 powershell -ExecutionPolicy Bypass -File tools/build-clang.ps1
 ```
 
-The output goes to `build/clang` instead of `build/gcc`, and the script copies `SDL3.dll` and `libwinpthread-1.dll` next to `ac5.exe`, so it starts from anywhere. Extra arguments are passed on to the CMake configure step, for example `-DPS2_DIAG=ON`.
+On the first run this downloads llvm-mingw and SDL3 into `deps/`, then configures and builds into `build/clang`. Extra arguments are passed on to the CMake configure step, for example `-DPS2_DIAG=ON`.
+
+The shaders get compiled into a `shaders` folder right next to `ac5.exe`, and that's where the game looks for them. If you ever move the exe somewhere else, take that folder with it. The script also copies `SDL3.dll` and `libwinpthread-1.dll` next to `ac5.exe`. `vulkan-1.dll` already comes with your graphics driver.
+
+Every generated file is basically one gigantic function, so give it a few minutes. There shouldn't be any warnings.
+
+When it's done you'll have:
+
+- `build/clang/ac5.exe`: the game
+- `build/clang/shaders/`: the compiled shaders
+- `build/clang/gsreplay.exe`: a dev tool that replays graphics captures, not needed to play
 
 ## Step 5: play
 
 Still in the repo root:
 
 ```powershell
-.\build\gcc\ac5.exe --data generated --disc "C:\path\to\Ace Combat 5 - The Unsung War (USA) (En,Ja).iso" --watchdog 0
+.\build\clang\ac5.exe --data generated --disc "C:\path\to\Ace Combat 5 - The Unsung War (USA) (En,Ja).iso" --watchdog 0
 ```
 
 - `--data` is the folder that has `ps2_image.bin` in it, so `generated`.
@@ -136,7 +111,7 @@ Still in the repo root:
 
 The window stays black for about 20 seconds before the first picture. That's normal, give it a moment. The log goes to stderr. In PowerShell 7 you can save it by sticking `2> ac5_log.txt` on the end. The older Windows PowerShell 5.1 mangles stderr when you redirect it like that, so if that's what you have, run the same command from `cmd` instead. `--verbose` makes it log a lot more (and it really is a lot).
 
-If you start `ac5.exe` from anywhere other than that terminal (double-clicking it in Explorer, say), Windows won't be able to find the SDL3 and pthread DLLs. Copy `SDL3.dll` and `libwinpthread-1.dll` from `C:\msys64\ucrt64\bin` into `build\gcc`, next to `ac5.exe`, and it'll start from anywhere. `vulkan-1.dll` already comes with your graphics driver. Keep in mind it still needs `--data` and `--disc`, so a shortcut with those arguments filled in is the easiest way to launch it outside a terminal.
+You can start `ac5.exe` from outside the terminal too (double-clicking it in Explorer, say), but it still needs `--data` and `--disc`, so a shortcut with those arguments filled in is the easiest way.
 
 Where your stuff goes:
 
@@ -196,7 +171,7 @@ The PS2's VU1 runs small vector programs that the game uploads to it while it's 
 
    ```powershell
    $env:PS2_VU_CENSUS = "1"
-   .\build\gcc\ac5.exe --data generated --disc "C:\path\to\game.iso" --watchdog 0
+   .\build\clang\ac5.exe --data generated --disc "C:\path\to\game.iso" --watchdog 0
    ```
 
    Get through the menus and into a mission, because some of the programs only get uploaded once you're actually flying. A short run that never leaves the menus only records the menu programs. Quit with Esc when you're done, and on the way out it writes `out\vu_programs\` (a `manifest.json` plus a `.bin` for each program).
@@ -214,7 +189,7 @@ The PS2's VU1 runs small vector programs that the game uploads to it while it's 
 
    ```powershell
    (Get-Item runtime\src\ps2_vu.c).LastWriteTime = Get-Date
-   cmake --build build/gcc
+   cmake --build build/clang
    ```
 
 Next time the game draws something with the VU1, the log should get a line like `vu1: 15 recompiled microprograms available` (15 is what a census through a full mission gave me, yours depends on how far you played). If you ever want to compare against the interpreter, set `PS2_VU_RECOMP=0`.
@@ -245,9 +220,9 @@ You don't need to. Everything in `config/` is already generated and committed, s
 ## Troubleshooting
 
 - **CMake says `Cannot find source file: .../generated/ps2_func_table.c`.** You haven't done step 3 yet, or the output went somewhere other than `generated`.
-- **CMake can't find Vulkan, `sdl3` or `glslc`.** Either the PATH line from step 2 didn't run in that window, the MSYS2 packages or the Vulkan SDK aren't installed, or the terminal was already open when you installed the SDK.
-- **CMake warns that the compiler has no musttail attribute.** Your GCC is too old, you need 15 or newer.
-- **ac5.exe won't start and complains about a missing DLL.** See the DLL note in step 5.
+- **CMake can't find Vulkan or `glslc`.** The Vulkan SDK isn't installed, or `VULKAN_SDK` isn't set in that terminal.
+- **CMake can't find SDL3.** `deps/` is missing or incomplete. Delete `deps/` and run the build script again.
+- **ac5.exe won't start and complains about a missing DLL.** `SDL3.dll` or `libwinpthread-1.dll` isn't next to it. Run the build script again, it copies both.
 - **The log says `vk: cannot open shader`.** The `shaders` folder isn't next to `ac5.exe` anymore. Put it back, or set `PS2_SHADER_DIR` to wherever the `.spv` files are.
 - **The game quits by itself with `==== WATCHDOG: the guest delivered no field for 10 seconds`.** You left out `--watchdog 0`.
 
