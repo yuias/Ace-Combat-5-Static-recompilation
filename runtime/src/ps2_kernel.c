@@ -9,6 +9,7 @@ void ps2_gs_stats(u64 *prims, u64 *pixels, u64 *regs);
 void ps2_gif_dump_arm(u32 packets);
 void ps2_gs_census_reset(void);
 unsigned ps2_vblank_budget(void);
+int ps2_time_up(void);
 void ps2_finish(const char *why);
 #include <stdio.h>
 #include <stdlib.h>
@@ -1119,6 +1120,7 @@ static void deliver_vblank(void) {
         unsigned budget = ps2_vblank_budget();
         if (ps2_exit_pending()) ps2_finish("window closed");
         if (budget && vblank_delivered >= budget) ps2_finish("frame budget");
+        if (ps2_time_up()) ps2_finish("time budget");
     }
 }
 

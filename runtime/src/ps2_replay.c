@@ -621,6 +621,7 @@ void rn_dma_transfer_slow(int ch, u32 madr, u32 qwc, int after) {
     (void)ch; (void)madr; (void)qwc; (void)after;
 }
 unsigned ps2_vblank_budget(void) { return 0u; }
+int ps2_time_up(void) { return 0; }
 void ps2_finish(const char *why) {
     fprintf(stderr, "[REPLAY] finish: %s\n", why ? why : "?");
     exit(0);

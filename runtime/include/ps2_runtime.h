@@ -446,6 +446,7 @@ void ps2_unknown_report(void);
 void ps2_request_exit(void);
 void ps2_finish(const char *why);
 unsigned ps2_vblank_budget(void);
+int ps2_time_up(void);
 int  ps2_exit_pending(void);
 
 enum {

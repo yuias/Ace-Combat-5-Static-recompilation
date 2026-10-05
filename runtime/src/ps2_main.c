@@ -243,6 +243,21 @@ void ps2_finish(const char *why) {
 
 unsigned ps2_vblank_budget(void) { return max_vblanks; }
 
+/* --seconds as a wall-clock limit on the running game. The post-entry loop in
+   main only sees it if the guest entry returns, which the game never does. */
+static double time_budget;
+static volatile int time_budget_expired;
+int ps2_time_up(void) { return time_budget_expired; }
+
+static void *time_budget_main(void *arg) {
+    (void)arg;
+    struct timespec ts = { (time_t)time_budget,
+                           (long)((time_budget - (double)(time_t)time_budget) * 1e9) };
+    nanosleep(&ts, NULL);
+    time_budget_expired = 1;
+    return NULL;
+}
+
 volatile int ps2_capture_request;
 static u64 capture_n;
 
@@ -453,7 +468,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             max_frames = (unsigned)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc)
-            budget = strtod(argv[++i], NULL);
+            budget = time_budget = strtod(argv[++i], NULL);
         else if (!strcmp(argv[i], "--watchdog") && i + 1 < argc)
             watchdog_seconds = (unsigned)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--disc") && i + 1 < argc) disc = argv[++i];
@@ -660,6 +675,12 @@ int main(int argc, char **argv) {
         pthread_t wd;
         pthread_create(&wd, NULL, watchdog_main, NULL);
         pthread_detach(wd);
+    }
+
+    if (time_budget > 0) {
+        pthread_t tb;
+        pthread_create(&tb, NULL, time_budget_main, NULL);
+        pthread_detach(tb);
     }
 
     t0 = clock();
