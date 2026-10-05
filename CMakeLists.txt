@@ -71,6 +71,7 @@ set(RUNTIME_SOURCES
     runtime/src/ps2_vfs.c
     runtime/src/ps2_region.c
     runtime/src/ps2_addr.c
+    runtime/src/ps2_hle_test.c
     runtime/src/ps2_hle_sif.c
     runtime/src/ps2_hle_cdvd.c
     runtime/src/ps2_hle_pad.c
