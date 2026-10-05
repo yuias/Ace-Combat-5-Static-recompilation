@@ -22,6 +22,7 @@ from regionmap.common import image_bounds
 from regionmap.common import words as read_words
 from regionmap.normalize import (REF_ABS, REF_CALL, REF_GP, find_gp, hi_range_for,
                                  Stream, normalize_stream, scan_gp, text_stream)
+from regionmap.report import cross_check, load_heuristic, write_report
 
 US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
 JP = os.path.join(ROOT, "tmp", "jp", "SLPS_254.18")
@@ -725,6 +726,73 @@ def test_evidence_filter():
     assert ev[(0x300030, 0x3003B0)] == 2, ev
 
 
+def test_report():
+    tmp = tempfile.mkdtemp()
+    try:
+        listing = os.path.join(tmp, "delta.txt")
+        with open(listing, "w") as fp:
+            fp.write("100000-100080 delta=+0x8 n=3\n"
+                     "100200-100280 delta=+0x10 n=3\n"
+                     "100300-100340 delta=+0x4 n=2\n"
+                     "unmatched 5 of 20\n")
+        runs = load_heuristic(listing)
+        assert runs == [(0x100000, 0x100080, 8, 3), (0x100200, 0x100280, 0x10, 3),
+                        (0x100300, 0x100340, 4, 2)], runs
+
+        def fn(us, d, status="same"):
+            f = make_func(us, us + 0x20, "sub_%X" % us)
+            f.jp, f.jp_end, f.status = us + d, us + 0x20 + d, status
+            return f
+        funcs = [fn(0x100000, 8), fn(0x100040, 8), fn(0x100080, 8),
+                 fn(0x100200, 0x10), fn(0x100240, 0x14, "body-changed"), fn(0x100280, 0x10),
+                 fn(0x100300, 0x10)]
+        funcs.append(FuncMatch(0x100400, 0x100420, "sub_100400", None, None, "unmatched",
+                               "none", 0.0, 0.0, "no match"))
+        res = cross_check(runs, funcs)
+        # The n=2 run is ignored; the run bounds are inclusive.
+        assert (res["agree"], res["disagree"]) == (5, 1), res
+        assert res["rows"][0]["us"] == 0x100240 and res["rows"][0]["ours"] == 0x14
+        funcs[5].jp = funcs[5].jp_end = None
+        funcs[5].status = "unmatched"
+        res = cross_check(runs, funcs)
+        assert res["disagree"] == 2 and res["rows"][1]["ours"] is None, res
+
+        class FakeElf:
+            def read(self, addr, size):
+                return b"AB\x00" * 20
+        m = make_map()
+        m.functions = funcs
+        m.sections.append({"name": ".data", "us_start": 0x300, "us_end": 0x400,
+                           "jp_start": 0x320, "jp_end": 0x420, "nobits": False})
+        m.stats.update(data={".data": {"inplace_spans": [[0x310, 0x318]], "inplace_words": 2}},
+                       nobits_boundaries=[[0x340, 0x380, 0x20, 0x40, ".data"]],
+                       evidence_agree=5, evidence_disagree=1, evidence_unmapped=0,
+                       evidence_disagreements=[[0x350, 0x370, 0x360, 2]])
+        m.us_info = {"file": "US.elf", "sha256": "ab" * 32}
+        m.jp_info = {"file": "JP.elf", "sha256": "cd" * 32}
+        m.validate()
+        path = os.path.join(tmp, "out", "regionmap.txt")
+        write_report(path, m, None, {"us_elf": FakeElf(), "jp_elf": FakeElf(),
+                                     "heuristic": res, "elapsed": 1.5})
+        with open(path, "rb") as fp:
+            raw = fp.read()
+        assert b"\r" not in raw
+        text = raw.decode()
+        for head in ("== Sections ==", "== Code delta segments", "== Unmatched functions (2) ==",
+                     "== Body-changed functions (1) ==", "== Uncertain regions (1) ==",
+                     "== Uncertain NOBITS boundaries (1) ==", "== Evidence disagreements (1) ==",
+                     "== Heuristic cross-check ==", "== JP-only code", "== Data ranges =="):
+            assert head in text, (head, text)
+        assert "00100400 sub_100400 size=0x20 no match" in text
+        assert "00100240 -> 00100254 sub_100240" in text
+        assert "00000310-00000318" in text and "<- weaker" in text
+        assert "|AB.AB.AB." in text and "00000350: code says 00000370, map says 00000360" in text
+        assert "ours=unmatched" in text and "disagree 2 (" in text
+        assert tmp not in text
+    finally:
+        shutil.rmtree(tmp)
+
+
 def run_tool(*args):
     env = dict(os.environ, PYTHONPATH=TOOLS)
     r = subprocess.run([sys.executable, "-m", "regionmap", *args], env=env, cwd=ROOT,
@@ -768,7 +836,9 @@ def test_real_normalize():
 def test_real_binaries():
     out = tempfile.mkdtemp()
     try:
-        text = run_tool("build", US, JP, "--out", out)
+        heur = os.path.join(ROOT, ".claude", "analysis", "jp_delta.txt")
+        extra_args = ["--heuristic", heur] if os.path.isfile(heur) else []
+        text = run_tool("build", US, JP, "--out", out, *extra_args)
         assert "elapsed" in text
         norm_lines = [l for l in text.splitlines() if l.startswith("normalize ")]
         assert len(norm_lines) == 2, text
@@ -886,6 +956,17 @@ def test_real_binaries():
         assert len(m.stats["evidence_disagreements"]) <= 50
         mw = re.search(r"^weak evidence \(.*\): (\d+) agree, (\d+) disagree$", text, re.M)
         assert mw and (int(mw.group(1)), int(mw.group(2))) ==             (m.stats["weak_agree"], m.stats["weak_disagree"]), text
+        with open(os.path.join(out, "regionmap.txt")) as fp:
+            report = fp.read()
+        for head in ("== Unmatched functions", "== Body-changed functions",
+                     "== Uncertain regions", "== Heuristic cross-check"):
+            assert head in report, head
+        assert out not in report and ROOT not in report
+        if extra_args:
+            mh = re.search(r"^heuristic: (\d+) agree, (\d+) disagree \(([\d.]+)%\)$", text, re.M)
+            assert mh and float(mh.group(3)) >= 95.0, text
+            assert m.stats["heuristic"] == {"agree": int(mh.group(1)),
+                                            "disagree": int(mh.group(2))}
     finally:
         shutil.rmtree(out)
 
@@ -904,6 +985,7 @@ test_load_units()
 test_data_walk()
 test_nobits_map()
 test_evidence_filter()
+test_report()
 
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_normalize()

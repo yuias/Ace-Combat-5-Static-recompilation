@@ -16,6 +16,7 @@ from .datamap import (check_evidence, collect_evidence, collect_weak_evidence, m
                       map_progbits)
 from .mapfile import Range, RegionMap, Uncertain, merge_ranges
 from .normalize import find_gp, hi_range_for, text_stream
+from .report import cross_check, load_heuristic, write_report
 
 
 def _load_elf(path, label):
@@ -145,9 +146,21 @@ def cmd_build(args, log=print):
         log("  disagree %08X: code says %08X, map says %08X (%d sites)" % (u, j, t, n))
     for lo, hi, da, db, name in boundaries:
         log("uncertain boundary %s %08X-%08X: %+#x -> %+#x" % (name, lo, hi, da, db))
+    extra = {"us_elf": us, "jp_elf": jp}
+    if args.heuristic:
+        check = cross_check(load_heuristic(args.heuristic), funcs)
+        total = check["agree"] + check["disagree"]
+        stats["heuristic"] = {"agree": check["agree"], "disagree": check["disagree"]}
+        extra["heuristic"] = check
+        log("heuristic: %d agree, %d disagree (%.1f%%)"
+            % (check["agree"], check["disagree"], 100.0 * check["agree"] / max(total, 1)))
     path = os.path.join(args.out, "regionmap.json")
     rmap.save(path)
     log("wrote %s" % path)
+    extra["elapsed"] = time.time() - t0
+    report = os.path.join(args.out, "regionmap.txt")
+    write_report(report, rmap, cm, extra)
+    log("wrote %s" % report)
     log("elapsed %.1f s" % (time.time() - t0))
     return 0
 
