@@ -1479,10 +1479,20 @@
   "lib": "libkernl.a",
   "words": 125
  },
+ "0x0033A940": {
+  "name": "_kTLBException",
+  "lib": "libkernl.a",
+  "words": 71
+ },
  "0x0033AA80": {
   "name": "_kExitTLBHandler",
   "lib": "libkernl.a",
   "words": 61
+ },
+ "0x0033AB80": {
+  "name": "_kDebugException",
+  "lib": "libkernl.a",
+  "words": 71
  },
  "0x0033AF38": {
   "name": "sceDbcEnd",
@@ -1639,6 +1649,11 @@
   "lib": "libmc.a",
   "words": 49
  },
+ "0x0033D0C0": {
+  "name": "mceGetInfoApdx",
+  "lib": "libmc.a",
+  "words": 22
+ },
  "0x0033D118": {
   "name": "sceMcGetInfo",
   "lib": "libmc.a (anchored)",
@@ -1718,6 +1733,11 @@
   "name": "sceCdInitEeCB",
   "lib": "libcdvd.a (anchored)",
   "words": 0
+ },
+ "0x0033E090": {
+  "name": "_sceCd_cd_read_intr",
+  "lib": "libcdvd.a",
+  "words": 46
  },
  "0x0033E148": {
   "name": "cmd_sem_init",
