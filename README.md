@@ -157,7 +157,7 @@ A mod can:
 
 `mods/README.md` explains all of it. The Lua API is `runtime/include/ac5mod.h`, and that header stays documented on purpose.
 
-To name files inside `DATA.PAC` you need `config/pac_names.txt`, which is already in the repo. If you want to rebuild it, `python -m modkit.export_names` generates it from `datapack.bin` in the PS4 release. `python -m modkit extract` pulls files out of the archive under the same names, so you have something to start from. Both need `PYTHONPATH` pointing at `tools`.
+To name files inside `DATA.PAC` you need the name table of your release, which is already in the repo: `config/pac_names.txt` for the US release and `config/slps-25418/pac_names.txt` for the Japanese one. The two archives are laid out differently (965 and 1169 members), so each build loads only its own table. A table that states a member count (`# members:`) different from the disc's is skipped, and the log says so. If you want to rebuild the US table, `python -m modkit.export_names` generates it from `datapack.bin` in the PS4 release. There is no such index for the Japanese release; its table comes from matching its files to the US ones by content (see [Japanese release](#japanese-release-slps-25418)). `python -m modkit extract` pulls files out of the archive under the same names, so you have something to start from; it picks the table from the disc's `SYSTEM.CNF`, or from `--region us|jp`. Both need `PYTHONPATH` pointing at `tools`.
 
 If the game misbehaves, set `PS2_NO_MODS=1` first. That turns the whole mod layer off, and if the problem is still there, it isn't a mod. `PS2_MOD_DIR` loads mods from a different folder. The log ends with a summary of every mod, conflict, hook and patch.
 
@@ -234,6 +234,16 @@ powershell -ExecutionPolicy Bypass -File tools/build-clang.ps1 -BuildDir build/c
 That gives you `build/clang-jp/ac5.exe`.
 
 Each build knows which region it was made from. A JP build refuses a US disc and a US build refuses a JP disc: the log says `region: ...` and the game exits. Set `PS2_ALLOW_REGION_MISMATCH=1` to run anyway, which is only useful for debugging because the result will not work.
+
+`config/slps-25418/pac_names.txt` names the Japanese `DATA.PAC` files that have a counterpart in the US archive, and mods can use those names like the US ones. The counterparts are found by content: `vfs_test files <disc>` lists every file slot of an archive with its size and hashes, and `python -m modkit.match_names` carries the US names over to the Japanese slots with the same content, falling back to a file of the same size or at the same position in the matching member where the content differs. Files that exist only in the Japanese release have no name and are addressed by position, as `BIN/DATA.PAC/<member>/#<index>`. The header of the table lists how many files each kind of match named.
+
+To regenerate it, build `vfs_test` (`python tools/test_vfs.py` does), list both discs, then match:
+
+```
+out/vfs_test/vfs_test.exe files US_DISC > us.txt
+out/vfs_test/vfs_test.exe files JP_DISC > jp.txt
+python -m modkit.match_names --us-list us.txt --jp-list jp.txt --us-names config/pac_names.txt -o config/slps-25418/pac_names.txt
+```
 
 ## Regenerating the config files
 

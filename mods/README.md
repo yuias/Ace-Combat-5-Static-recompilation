@@ -45,9 +45,9 @@ A file under `files/` is named the way the filesystem names it:
 
 - **A whole file on the disc**, by its path: `BIN/US/BGM.PAC`. The size may
   change.
-- **A file inside `DATA.PAC`, every copy**, by its name from
-  `config/pac_names.txt`: `select/noise.gim`. Many names repeat across members,
-  and a plain name replaces every copy the disc has.
+- **A file inside `DATA.PAC`, every copy**, by its name from the name table of
+  the release: `select/noise.gim`. Many names repeat across members, and a
+  plain name replaces every copy the disc has.
 - **One copy**, by member: `BIN/DATA.PAC/0011/map/m09a/m09a.wad`, or by
   position where there is no name: `BIN/DATA.PAC/0958/#4`. This form can also
   add a file to a slot the member leaves empty.
@@ -60,10 +60,41 @@ disc leaves empty, and the log warns when the copies it replaces differ in
 size. When a warning names a member you did not mean, give that member its own
 file.
 
+### One name table per release
+
+The two releases pack `DATA.PAC` differently (965 members in the US one, 1169
+in the Japanese one), so each has its own table:
+
+| Release | Table |
+| --- | --- |
+| SLUS-20851 (US) | `config/pac_names.txt` |
+| SLPS-25418 (Japan) | `config/slps-25418/pac_names.txt` |
+
+The game loads the table of the release it was built for, and the log says
+which one (`vfs: archive names from ...`). `PS2_MOD_NAMES` points it at another
+file. A table carries a `# members: <n>` line; if `n` is not the disc's member
+count, the table is skipped and the log says
+`vfs: <path> is for a DATA.PAC with <n> members; this disc has <m>; skipped`.
+So a US table never names the wrong files on a Japanese disc, it just names
+none.
+
+The Japanese table was made by matching the Japanese files to the US ones by
+content (`vfs_test files` and `modkit.match_names`) and carrying the US names
+over. Files that exist only in the Japanese release have no name. Address them
+by position, `BIN/DATA.PAC/<member>/#<index>`; `python -m modkit extract`
+writes unnamed files under that form. A mod for one release only can say so with `game` in
+its `mod.toml`.
+
 ```
+python -m modkit list    --disc DIR
+python -m modkit extract --disc DIR --out DIR --member 11
 python -m modkit list    --disc DIR --names datapack.bin
-python -m modkit extract --disc DIR --names datapack.bin --out DIR --member 11
 ```
+
+`--disc` is an extracted disc folder. `modkit` picks the table from the disc's
+`SYSTEM.CNF`; `--region us` or `--region jp` overrides that, and
+`--names-table FILE` uses a table of your own. `--names datapack.bin` reads the
+PS4 index instead, which matches the US layout only.
 
 `extract` writes the paths the filesystem uses, so a file can go straight into
 a mod. `--ref-tree` cuts each file to its true length; without it a file keeps
