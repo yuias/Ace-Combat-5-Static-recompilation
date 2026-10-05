@@ -868,6 +868,16 @@ def test_real_pair():
         shutil.rmtree(root)
 
 
+def test_committed_config():
+    from regionconfig.__main__ import main
+    mp = os.path.join(ROOT, "tmp", "regionmap", "regionmap.json")
+    out = os.path.join(CONFIG, "slps-25418")
+    if not (os.path.isfile(mp) and os.path.isdir(out)):
+        print("SKIP: committed JP config or tmp/regionmap/regionmap.json missing")
+        return
+    assert main(["check", "--out", out]) == 0
+
+
 test_lookups()
 test_rename()
 test_fail_and_drop()
@@ -887,6 +897,7 @@ if os.path.isfile(US):
     test_real_refs_identity()
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_pair()
+    test_committed_config()
     print("PASS: regionconfig (synthetic + real binaries)")
 elif os.path.isfile(US):
     print("SKIP: JP binary not present")
