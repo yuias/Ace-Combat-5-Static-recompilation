@@ -18,8 +18,10 @@
  *
  * ADDRESSES ARE STABLE.  A guest address means the same thing in every build:
  * the executable it came from is pinned by SHA-256, so 0x0011DB30 is the same
- * function next year as today.  config/game_symbols.txt names the functions
- * the game's own debug messages identify, and symbol() looks names up.
+ * function next year as today.  config/game_symbols.txt (US) and
+ * config/slps-25418/game_symbols.txt (JP) name the functions the game's own
+ * debug messages identify, and symbol() looks names up.  A mod's addresses
+ * belong to one game id; the two releases have different addresses.
  *
  * WHICH THREAD.  Everything here except log() must happen on a thread that
  * holds the EE: in ac5_mod_main, a hook, or any callback below -- which is
@@ -163,7 +165,9 @@ struct ac5_api {
 
     /* -- names ------------------------------------------------------------
      * The address of a named function, or 0.  Names come from the recompiler,
-     * config/game_symbols.txt and every enabled mod's symbols.txt. */
+     * the running region's game_symbols.txt (config/ for SLUS-20851,
+     * config/slps-25418/ for SLPS-25418) and every enabled mod's
+     * symbols.txt. */
     uint32_t (*symbol)(const char *name);
     const char *(*symbol_name)(uint32_t guest_addr);
 

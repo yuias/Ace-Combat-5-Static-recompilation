@@ -112,7 +112,8 @@ modules for `require` in a subdirectory. A script sees one table, `ac5`, which
 is `runtime/include/ac5mod.h` call for call:
 
 ```lua
--- functions: by address, or by name (config/game_symbols.txt, symbols.txt)
+-- functions: by address, or by name (config/game_symbols.txt for SLUS-20851,
+-- config/slps-25418/game_symbols.txt for SLPS-25418, and symbols.txt)
 ac5.hook_before(0x0011DB30, function(ctx) count = count + 1 end)
 ac5.hook_after("CTxtio::_GetFloat", function(ctx)
     ac5.set_return_float(ctx, ac5.return_float(ctx) * 2)
@@ -175,7 +176,7 @@ enabled  = false         # switch it off without deleting it
 native   = true          # allow the DLLs in this directory to load
 requires = "base_pack >= 1.2, helpers"
 abi      = 3             # the mod ABI it needs, at least
-game     = "SLUS-20851"
+game     = "SLUS-20851"  # or "SLPS-25418" for the Japanese release
 
 [config]
 volume   = "0.8"         # read back with ac5.config("volume")
