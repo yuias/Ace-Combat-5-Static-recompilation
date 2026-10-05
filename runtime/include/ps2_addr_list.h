@@ -181,6 +181,9 @@ PS2_ADDR(AC5_ULZ_SETUP,             0x00102A78u, FUNC, 4)
 PS2_ADDR(AC5_HOOK_SELFTEST,         0x0011DB30u, FUNC, 0)
 PS2_ADDR(AC5_CODE_END,              0x003992C0u, END,  0)
 
+/* Pad consumer that --hle-test runs on a fake controller state */
+PS2_ADDR(AC5_PAD_CONSUMER,          0x0032AD00u, FUNC, 4)
+
 /* Widescreen patch words (written by the runtime, so checked at generate time only) */
 PS2_ADDR(AC5_WS_0,                  0x00440828u, DATA, 1)
 PS2_ADDR(AC5_WS_1,                  0x0044082Cu, DATA, 1)

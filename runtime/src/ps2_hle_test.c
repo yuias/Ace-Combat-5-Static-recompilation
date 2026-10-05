@@ -1,6 +1,7 @@
 #include "ps2_runtime.h"
 #include "ps2_hle.h"
 #include "ps2_vfs.h"
+#include "ps2_addr.h"
 #include <string.h>
 
 void hle_sceSifAllocIopHeap(ps2_ctx *);
@@ -74,9 +75,9 @@ int ps2_hle_selftest(const char *disc) {
         ps2_pad_host[0].buttons = 8;
         guest.r[4].ud[0] = send;
         guest.r[29].ud[0] = 0x01ff0000;
-        ps2_dispatch(&guest, 0x0032ad00);
+        ps2_dispatch(&guest, PS2_A(AC5_PAD_CONSUMER));
         guest.r[4].ud[0] = send;
-        ps2_dispatch(&guest, 0x0032ad00);
+        ps2_dispatch(&guest, PS2_A(AC5_PAD_CONSUMER));
         int input_bad = ps2_r8(send + 920) != 0
                      || !(ps2_r16(send + 916) & 8)
                      || !(ps2_r16(send + 918) & 8);
@@ -97,7 +98,8 @@ int ps2_hle_selftest(const char *disc) {
         fail += ps2_vfs_open(disc) != 0;
         fail += ps2_rpc_call(0x80000593u, 3, 0, 0, recv, 4) != 0;
         fail += ps2_r32(recv) != 0x14;
-        const char path[] = "cd:\\BIN\\RADIOEE.PAC";
+        /* DATA.PAC is on every release; the radio archives are named per region. */
+        const char path[] = "cd:\\BIN\\DATA.PAC";
         ps2_w32(send + 0x18, sizeof(path));
         ps2_put_mem(send + 0x1c, path, sizeof(path));
         ps2_rpc_call(0x4e554649u, 1, send, 64, recv, 4);
