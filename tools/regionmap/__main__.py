@@ -10,6 +10,7 @@ if __package__ in (None, ""):
 import paths
 from ps2recomp.elf import ElfFile
 
+from .codematch import CodeMatcher, load_units
 from .common import file_info, image_bounds, pair_sections
 from .mapfile import Range, RegionMap, Uncertain
 from .normalize import find_gp, hi_range_for, text_stream
@@ -58,6 +59,7 @@ def cmd_build(args, log=print):
     # Both streams use the union image bounds so the lui window is identical.
     hi_range = hi_range_for(image_bounds(us, jp))
     us_info, jp_info = file_info(us), file_info(jp)
+    streams = []
     for elf, info in ((us, us_info), (jp, jp_info)):
         t1 = time.time()
         gp = find_gp(elf)
@@ -70,9 +72,28 @@ def cmd_build(args, log=print):
             % (info["file"], len(st.raw), st.stats["call"], st.stats["lui"],
                st.stats["abs"], st.stats["gp"],
                "%08X" % gp if gp is not None else "none", time.time() - t1))
+        streams.append(st)
+
+    t1 = time.time()
+    us_st, jp_st = streams
+    units = load_units(args.ida, us_st.base, us_st.addr(len(us_st.raw)))
+    cm = CodeMatcher(us_st, jp_st, units, log=log)
+    cm.run()
+    funcs = cm.functions()
+    counts = {}
+    for f in funcs:
+        counts[f.status] = counts.get(f.status, 0) + 1
+    log("code: %d functions (%d units): same %d, body-changed %d, unmatched %d; %.1f s"
+        % (len(funcs), len(units), counts.get("same", 0), counts.get("body-changed", 0),
+           counts.get("unmatched", 0), time.time() - t1))
+
+    # Code ranges replace the section-level placeholder for .text.
+    ranges = [r for r in ranges if r.section != ".text"] + cm.code_ranges()
+    ranges.sort(key=lambda r: r.us_start)
+    uncertain = [u for u in uncertain if u.section != ".text"]
 
     rmap = RegionMap(us_info, jp_info, [_section_dict(p) for p in pairs],
-                     ranges, uncertain, [], {})
+                     ranges, uncertain, funcs, {"code": cm.stats})
     rmap.validate()
     path = os.path.join(args.out, "regionmap.json")
     rmap.save(path)

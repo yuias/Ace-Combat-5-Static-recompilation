@@ -13,11 +13,12 @@ sys.path.insert(0, TOOLS)
 
 from ps2recomp.elf import ElfFile
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
+from regionmap.codematch import CodeMatcher, Unit, load_units
 from regionmap.mapfile import merge_ranges
 from regionmap.common import image_bounds
 from regionmap.common import words as read_words
 from regionmap.normalize import (REF_ABS, REF_CALL, REF_GP, find_gp, hi_range_for,
-                                 normalize_stream, scan_gp, text_stream)
+                                 Stream, normalize_stream, scan_gp, text_stream)
 
 US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
 JP = os.path.join(ROOT, "tmp", "jp", "SLPS_254.18")
@@ -289,6 +290,81 @@ def test_find_gp():
     assert find_gp(FakeElf(0x1000, [addiu(GP, GP, 4), lui(GP, 0x45)])) is None
 
 
+def plain_stream(base, words):
+    return Stream(base, list(words), list(words), {}, {})
+
+
+def test_exact_pass_synthetic():
+    seq = lambda hi, n: [hi + k for k in range(n)]
+    a, b, c, d, z = seq(0x110, 6), seq(0x120, 6), seq(0x130, 5), seq(0x140, 4), seq(0x150, 2)
+    # JP inserts two words between A and B, so B, C and D move by +8.
+    us = plain_stream(0x1000, a + b + c + [0, 0] + d + z)
+    jp = plain_stream(0x2000, a + [0, 0] + b + c + [0, 0] + d + z)
+
+    def units():
+        w = lambda i: 0x1000 + 4 * i
+        return [Unit(w(0), w(6), w(0), "fa", True),
+                Unit(w(6), w(12), w(6), "fb", True),
+                Unit(w(12), w(17), w(12), "fc", True),
+                Unit(w(19), w(23), w(19), "fd", True),
+                Unit(w(23), w(25), w(6), "fb", False)]   # tail chunk of fb
+
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.run()
+    ua, ub, uc, ud, uz = cm.units
+    assert (ua.status, ua.jp, ua.confidence) == ("same", 0x2000, 1.0), ua
+    assert (ub.status, ub.jp, ub.confidence) == ("same", 0x2020, 0.95), ub
+    assert (uc.status, uc.jp) == ("same", 0x2038) and ud.jp == 0x2054
+    assert uz.status == "unmatched" and uz.jp is None   # below MIN_EXACT_WORDS
+
+    rows = [(r.us_start, r.us_end, r.delta) for r in cm.code_ranges()]
+    # B, C, the padding between C and D, and D share one shift and merge.
+    assert rows == [(0x1000, 0x1018, 0x1000), (0x1018, 0x105C, 0x1008)], rows
+    assert cm.code_translate(0x1018) == 0x2020 and cm.code_translate(0x1030) == 0x2038
+    assert cm.code_translate(0x105C) is None and cm.code_translate(0xFFF) is None
+    assert list(cm.aligned_pairs())[:2] == [(0, 0), (1, 1)]
+
+    fns = {f.name: f for f in cm.functions()}
+    assert fns["fa"].status == "same" and fns["fa"].chunks == []
+    # A non-main chunk that is not matched downgrades a matched main chunk.
+    assert fns["fb"].status == "body-changed" and fns["fb"].jp == 0x2020
+    assert fns["fb"].chunks == [[0x1018, 0x1030, 0x2020, "same"],
+                                [0x105C, 0x1064, None, "unmatched"]], fns["fb"].chunks
+
+    # Link order: a unit placed before the end of the previously accepted one
+    # is dropped. Walking the units out of US order forces that case.
+    cm = CodeMatcher(us, plain_stream(0x2000, us.raw), units(), log=lambda *x: None)
+    cm.reps = [cm.units[1], cm.units[0]]
+    cm.match_exact()
+    assert cm.units[1].status == "same" and cm.units[0].status == "unmatched"
+    assert cm.units[0].note == "order" and cm.stats["order_demoted"] == 1
+
+    # Chunks shared by two functions are matched once and both get the result.
+    shared = units()
+    shared.insert(1, Unit(0x1000, 0x1018, 0x1018, "alias", True))
+    cm = CodeMatcher(us, jp, shared, log=lambda *x: None)
+    cm.run()
+    assert [u.jp for u in cm.units[:2]] == [0x2000, 0x2000]
+    assert [(r.us_start, r.us_end) for r in cm.code_ranges()][0] == (0x1000, 0x1018)
+
+
+def test_load_units():
+    d = tempfile.mkdtemp()
+    try:
+        path = os.path.join(d, "db.json")
+        with open(path, "w") as fp:
+            json.dump({"functions": [
+                {"ea": 0x200, "name": "f1", "chunks": [[0x200, 0x210], [0x100, 0x110]]},
+                {"ea": 0x300, "name": "f2", "chunks": [[0x300, 0x2F0], [0x300, 0x320]]},
+                {"ea": 0x5000, "name": "f3", "chunks": [[0x5000, 0x5010]]}]}, fp)
+        us = load_units(path, 0x100, 0x400)
+        # Empty and out-of-text chunks are skipped; the rest are sorted.
+        assert [(u.us, u.name, u.main) for u in us] == \
+            [(0x100, "f1", False), (0x200, "f1", True), (0x300, "f2", True)]
+    finally:
+        shutil.rmtree(d)
+
+
 def run_tool(*args):
     env = dict(os.environ, PYTHONPATH=TOOLS)
     r = subprocess.run([sys.executable, "-m", "regionmap", *args], env=env, cwd=ROOT,
@@ -372,6 +448,18 @@ def test_real_binaries():
         assert run_tool("lookup", path, "3C7F00") == run_tool("lookup", path, "0x3C7F00")
         assert run_tool("lookup", path, "446100").startswith("00446100 -> 00446480")
         assert run_tool("lookup", path, "0x1").startswith("00000001 -> unmapped")
+
+        code = [l for l in text.splitlines() if l.startswith("code: ")]
+        assert len(code) == 1, text
+        mc = re.match(r"code: (\d+) functions \((\d+) units\): same (\d+), "
+                      r"body-changed (\d+), unmatched (\d+); ([\d.]+) s$", code[0])
+        assert mc, code[0]
+        nfunc, same, bc, un = (int(mc.group(k)) for k in (1, 3, 4, 5))
+        assert same >= 6000 and same + bc + un == nfunc, code[0]
+        assert len(m.functions) == nfunc
+        assert m.translate(0x31C138) == 0x31C460
+        entry = run_tool("lookup", path, "0x31C138").split()
+        assert entry[:4] == ["0031C138", "->", "0031C460", ".text"] and entry[4] == "same"
     finally:
         shutil.rmtree(out)
 
@@ -381,6 +469,8 @@ test_validate_translate()
 test_json_roundtrip()
 test_normalize_synthetic()
 test_find_gp()
+test_exact_pass_synthetic()
+test_load_units()
 
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_normalize()
