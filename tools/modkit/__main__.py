@@ -6,12 +6,44 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "modkit"
 
+import regions
+
 from . import ulz
-from .pac import Archive, Names, open_disc
+from .pac import Archive, Names, TextNames, open_disc
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _disc_region(disc):
+    cnf = os.path.join(disc, "SYSTEM.CNF")
+    if not os.path.isfile(cnf):
+        return None
+    with open(cnf, "r", encoding="ascii", errors="replace") as fp:
+        exe = regions.exe_from_system_cnf(fp.read())
+    return regions.by_exe_name(exe) if exe else None
 
 
 def _names(args):
-    return Names(args.names) if args.names else None
+    """The name source: datapack.bin, an explicit table, or the disc region's."""
+    if args.names and args.names_table:
+        raise SystemExit("--names and --names-table are exclusive")
+    if args.names:
+        return Names(args.names)
+    path = args.names_table
+    if not path:
+        # The table is per region: member layouts differ between releases.
+        region = regions.by_key(args.region) if args.region \
+            else _disc_region(args.disc)
+        if region is None:
+            print("names: region not recognised from SYSTEM.CNF; "
+                  "pass --region or --names-table")
+            return None
+        path = regions.config_file(region, "pac_names.txt", ROOT)
+        if not os.path.isfile(path):
+            print("names: no table for %s (%s)" % (region.game_id, path))
+            return None
+    print("names: %s" % os.path.relpath(path, ROOT).replace(os.sep, "/"))
+    return TextNames(path)
 
 
 def _ref_len(root, name):
@@ -35,7 +67,8 @@ def cmd_list(args):
     for i in range(min(limit, ar.count)):
         n = ar.file_count(i)
         names = nm.names_for(i, expect=n) if nm else None
-        shown = ", ".join(names[:3]) + (" ..." if names and len(names) > 3 else "") \
+        names = [x for x in names if x] if names else None
+        shown = ", ".join(names[:3]) + (" ..." if len(names) > 3 else "") \
             if names else "(unnamed)"
         print("%-5d %10d %10d %6d  %s"
               % (i, ar.entries[i][1], ar.unpacked[i], n, shown))
@@ -128,9 +161,16 @@ def cmd_verify(args):
         pct = 100.0 * named / ar.count
         print("  %-62s %d/%d (%.1f%%)" % ("members whose names line up", named,
                                           ar.count, pct))
-        check(pct > 95.0, "name mapping covers more than 95% of members")
+        if isinstance(nm, TextNames):
+            # A text table is partial by design (JP-only files stay unnamed).
+            if nm.members is not None:
+                check(nm.members == ar.count,
+                      "table's member count %d matches the disc's %d"
+                      % (nm.members, ar.count))
+        else:
+            check(pct > 95.0, "name mapping covers more than 95% of members")
     else:
-        print("  (no --names given, so the name mapping was not checked)")
+        print("  (no name table, so the name mapping was not checked)")
 
     ar.close()
     print("\n%s" % ("all checks passed" if not fails
@@ -146,6 +186,12 @@ def main(argv=None):
         p = sub.add_parser(name)
         p.add_argument("--disc", required=True)
         p.add_argument("--names", help="datapack.bin from the PS4 release")
+        p.add_argument("--names-table", dest="names_table",
+                       help="a '<member> <index> <name>' table (default: the "
+                            "disc region's config/**/pac_names.txt)")
+        p.add_argument("--region", choices=[r.key for r in regions.REGIONS],
+                       help="region whose table to use (default: read from "
+                            "<disc>/SYSTEM.CNF)")
         if name == "list":
             p.add_argument("--limit", type=int, default=20)
         if name == "extract":

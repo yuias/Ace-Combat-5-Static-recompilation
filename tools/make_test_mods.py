@@ -27,7 +27,7 @@ def build():
 
 def cat(disc, path, dst):
     dst.parent.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, PS2_MOD_NAMES=str(root / 'config' / 'pac_names.txt'))
+    env = dict(os.environ, PS2_MOD_NAMES=paths.region_config('pac_names.txt'))
     subprocess.run([str(exe), 'cat', str(disc), path, str(dst)], check=True, env=env)
 
 

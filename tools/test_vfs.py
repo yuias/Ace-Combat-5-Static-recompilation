@@ -15,7 +15,7 @@ work.mkdir(parents=True, exist_ok=True)
 exe = out / 'vfs_test.exe'
 tree = Path(paths.DISC)
 iso = Path(str(tree) + '.iso')
-names = root / 'config' / 'pac_names.txt'
+names = Path(paths.region_config('pac_names.txt'))
 
 subprocess.run([toolchain.cc(), '-std=gnu2x', '-O2', '-fno-strict-aliasing', '-fwrapv',
                 '-Wall', '-Wextra', '-Wno-unused-parameter',

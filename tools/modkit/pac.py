@@ -140,6 +140,38 @@ class Names:
         return [self.record(first + k)[1] for k in range(count)]
 
 
+class TextNames:
+    """A `<member> <index> <name>` table such as config/pac_names.txt."""
+
+    MEMBERS_TAG = "# members:"
+
+    def __init__(self, path):
+        self.members = None
+        self._by_member = {}
+        with open(path, "r", encoding="utf-8") as fp:
+            for line in fp:
+                line = line.rstrip("\r\n")
+                if line.startswith(self.MEMBERS_TAG):
+                    try:
+                        self.members = int(line[len(self.MEMBERS_TAG):])
+                    except ValueError:
+                        pass
+                    continue
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                m, k, name = line.split(" ", 2)
+                self._by_member.setdefault(int(m), {})[int(k)] = name.strip()
+
+    def names_for(self, member_index, expect=None):
+        named = self._by_member.get(member_index)
+        if not named:
+            return None
+        if expect is None:
+            expect = max(named) + 1
+        # Slots past `expect` belong to another layout; ignore them.
+        return [named.get(k) for k in range(expect)]
+
+
 def open_disc(root):
     tbl = os.path.join(root, "BIN", "DATA.TBL")
     pac = os.path.join(root, "BIN", "DATA.PAC")
