@@ -303,12 +303,18 @@ static u16 pad_buttons(int port, const ps2_pad_state *st) {
                 buttons |= pad_script[i].mask;
     }
     if (pad_autoplay && port == 0 && pad_reads > 240) {
+        /* The JP release confirms with Circle and cancels with Cross. */
+#if PS2_BUILD_REGION == 1
+        const int confirm = PAD_CIRCLE, cancel = PAD_CROSS;
+#else
+        const int confirm = PAD_CROSS, cancel = PAD_CIRCLE;
+#endif
         u64 phase = pad_reads % 150;
-        if (phase < 6)       buttons |= 1u << PAD_CROSS;
+        if (phase < 6)       buttons |= 1u << confirm;
         else if (phase < 12) {
             if (pad_scene_major != PAD_SCENE_MISSION) buttons |= 1u << PAD_START;
         }
-        else if (phase < 18) buttons |= 1u << PAD_CIRCLE;
+        else if (phase < 18) buttons |= 1u << cancel;
     }
     return buttons;
 }
