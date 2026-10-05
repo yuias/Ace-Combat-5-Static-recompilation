@@ -3,12 +3,15 @@ import os
 import shutil
 import sys
 import tempfile
+from functools import partial
+from types import SimpleNamespace
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 
 from ps2recomp.elf import ElfFile
+from regionconfig import idadb
 from regionconfig.__main__ import HANDLERS, generate, run_check, run_translate, verify_inputs
 from regionconfig.core import Translator, fmt_like
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
@@ -18,6 +21,10 @@ from regionmap.mapfile import merge_ranges
 US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
 JP = os.path.join(ROOT, "tmp", "jp", "SLPS_254.18")
 CONFIG = os.path.join(ROOT, "config")
+
+# The CLI list fails on purpose while ida_db switches are untranslated.
+SYMBOL_HANDLERS = [h for h in HANDLERS if h is not idadb.handle]
+NO_SWITCH_HANDLERS = SYMBOL_HANDLERS + [partial(idadb.handle, switches=False)]
 
 SYMBOL_FILES = ("hooks.json", "overrides.json", "manual_symbols.json",
                 "sdk_symbols.json", "game_symbols.txt")
@@ -144,7 +151,7 @@ def test_fail_and_drop():
         out = os.path.join(root, "out")
         log = []
         tr = Translator(synthetic_map(), None, None)
-        assert run_translate(tr, HANDLERS, src, out, log.append) == 1
+        assert run_translate(tr, SYMBOL_HANDLERS, src, out, log.append) == 1
         assert not os.path.exists(out)
         assert any(l.startswith("FAIL hooks.json hooks:0x00000500 us=0x00000500: "
                                 "outside every mapped range") for l in log), log
@@ -152,13 +159,13 @@ def test_fail_and_drop():
         # An unmapped override address fails too.
         make_src(src, {"0x00000100": "hook_x"}, {"0x00000500": "n"}, sdk)
         tr = Translator(synthetic_map(), None, None)
-        assert run_translate(tr, HANDLERS, src, out, [].append) == 1
+        assert run_translate(tr, SYMBOL_HANDLERS, src, out, [].append) == 1
 
         # An unmapped sdk symbol is dropped and listed.
         make_src(src, {"0x00000100": "hook_x"}, good_overrides, sdk)
         tr = Translator(synthetic_map(), None, None)
         log = []
-        assert run_translate(tr, HANDLERS, src, out, log.append) == 0, log
+        assert run_translate(tr, SYMBOL_HANDLERS, src, out, log.append) == 0, log
         assert json.load(open(os.path.join(out, "sdk_symbols.json"))) == \
             {"0x00000110": {"name": "keep", "lib": "l", "words": 1}}
         assert json.load(open(os.path.join(out, "hooks.json"))) == {"0x00000110": "hook_x"}
@@ -184,7 +191,7 @@ def test_fail_and_drop():
         # override resolves by name fails.
         make_src(src, {"0x00000180": "hook_bc"}, good_overrides, sdk)
         tr = Translator(synthetic_map(), None, None)
-        assert run_translate(tr, HANDLERS, src, out, [].append) == 0
+        assert run_translate(tr, SYMBOL_HANDLERS, src, out, [].append) == 0
         assert json.load(open(os.path.join(out, "hooks.json"))) == {"0x000001A8": "hook_bc"}
         assert [n["note"] for n in json.load(open(os.path.join(out, "manifest.json")))["notes"]
                 if n["file"] == "hooks.json"] == ["target is in body-changed sub_180"]
@@ -192,34 +199,34 @@ def test_fail_and_drop():
         make_src(src, {"0x00000100": "hook_x"}, {"gone": "n"}, sdk)
         tr = Translator(synthetic_map(), None, None)
         log = []
-        assert run_translate(tr, HANDLERS, src, out + "2", log.append) == 1
+        assert run_translate(tr, SYMBOL_HANDLERS, src, out + "2", log.append) == 1
         assert any("FAIL sdk_symbols.json sdk_symbols:0x00000500" in l for l in log), log
         assert not os.path.exists(out + "2")
 
         # check: unchanged -> 0, modified or missing file -> 1.
         make_src(src, {"0x00000100": "hook_x"}, good_overrides, sdk)
-        assert run_translate(Translator(synthetic_map(), None, None), HANDLERS, src,
+        assert run_translate(Translator(synthetic_map(), None, None), SYMBOL_HANDLERS, src,
                              out, [].append) == 0
         log = []
-        assert run_check(Translator(synthetic_map(), None, None), HANDLERS, src, out,
+        assert run_check(Translator(synthetic_map(), None, None), SYMBOL_HANDLERS, src, out,
                          log.append) == 0
         assert log[-1].endswith("is up to date"), log
         with open(os.path.join(out, "hooks.json"), "a") as fp:
             fp.write(" ")
         os.remove(os.path.join(out, "manifest.json"))
         log = []
-        assert run_check(Translator(synthetic_map(), None, None), HANDLERS, src, out,
+        assert run_check(Translator(synthetic_map(), None, None), SYMBOL_HANDLERS, src, out,
                          log.append) == 1
         assert "regionconfig: hooks.json differs" in log
         assert "regionconfig: manifest.json differs" in log
         assert "regionconfig: overrides.json differs" not in log
         # Regenerating restores a clean state; extra files in --out (report.json)
         # do not matter.
-        assert run_translate(Translator(synthetic_map(), None, None), HANDLERS, src,
+        assert run_translate(Translator(synthetic_map(), None, None), SYMBOL_HANDLERS, src,
                              out, [].append) == 0
         write(os.path.join(out, "report.json"), "{}")
         log = []
-        assert run_check(Translator(synthetic_map(), None, None), HANDLERS, src, out,
+        assert run_check(Translator(synthetic_map(), None, None), SYMBOL_HANDLERS, src, out,
                          log.append) == 0, log
     finally:
         shutil.rmtree(root)
@@ -232,14 +239,14 @@ def test_duplicates_and_order():
         os.makedirs(src)
         sdk = {"0x00000104": {"name": "b"}, "0x00000100": {"name": "a"}}
         make_src(src, {}, {}, sdk)
-        out = generate(Translator(synthetic_map(), None, None), HANDLERS, src, [].append)
+        out = generate(Translator(synthetic_map(), None, None), SYMBOL_HANDLERS, src, [].append)
         assert out is not None
         assert list(json.loads(out["sdk_symbols.json"])) == ["0x00000114", "0x00000110"], \
             "US key order is kept"
         # 0x180 is placed at 0x1A8 by its match and 0x198 maps there by range.
         make_src(src, {"0x00000180": "h1", "0x00000198": "h2"}, {}, sdk)
         log = []
-        assert generate(Translator(synthetic_map(), None, None), HANDLERS, src,
+        assert generate(Translator(synthetic_map(), None, None), SYMBOL_HANDLERS, src,
                         log.append) is None
         assert any("hooks.json hooks:0x00000198" in l and "maps onto 0x000001A8" in l
                    for l in log), log
@@ -260,7 +267,7 @@ def test_real_identity():
     rmap = identity_map(US, os.path.join(CONFIG, "ida_db.json"))
     rmap.validate()
     tr = Translator(rmap, us, us)
-    outputs = generate(tr, HANDLERS, CONFIG, print)
+    outputs = generate(tr, SYMBOL_HANDLERS, CONFIG, print)
     assert outputs is not None
     assert not tr.dropped and not tr.rederived, tr.dropped[:3]
     for name in SYMBOL_FILES:
@@ -280,17 +287,183 @@ def test_real_identity():
     assert not tr.failures
 
 
+def fake_elf(entry, sections):
+    secs = [SimpleNamespace(name=n, addr=a, size=z, is_alloc=True) for n, a, z in sections]
+    return SimpleNamespace(entry=entry, sections=secs, path="x")
+
+
+def ida_segments():
+    """A LOAD gap, an exclusive-end section and a segment that IDA upper-cases."""
+    return [{"name": ".text", "start": 0x100, "end": 0x400, "perm": 5, "type": 2, "bitness": 1},
+            {"name": "REGINFO", "start": 0x400, "end": 0x418, "perm": 4, "type": 3, "bitness": 1},
+            {"name": "LOAD", "start": 0x418, "end": 0x420, "perm": 6, "type": 3, "bitness": 1},
+            {"name": ".data", "start": 0x420, "end": 0x500, "perm": 6, "type": 3, "bitness": 1}]
+
+
+def ida_us_elf():
+    return fake_elf(0x120, [(".text", 0x100, 0x300), (".reginfo", 0x400, 0x18),
+                            (".data", 0x420, 0xE0)])
+
+
+def ida_db_dict(funcs, names):
+    return {"meta": {"imagebase": 0x100, "entry": 0x120, "min_ea": 0x100, "max_ea": 0x500,
+                     "input": "US"},
+            "segments": ida_segments(), "functions": funcs, "switches": [], "names": names}
+
+
+def ifunc(ea, name, chunks):
+    return {"ea": ea, "name": name, "chunks": chunks, "flags": 0, "noret": False,
+            "thunk": False, "lib": False}
+
+
+def test_ida_segments():
+    us = ida_us_elf()
+    root = tempfile.mkdtemp()
+    try:
+        write(os.path.join(root, "ida_db.json"), json.dumps(ida_db_dict([], {})))
+
+        def run(jp, us_elf=us):
+            tr = Translator(synthetic_map(), us_elf, jp)
+            return tr, json.loads(idadb.handle(tr, root, switches=False)[idadb.FILE])
+
+        # JP section headers give the exclusive ends; the gap spans between them.
+        jp = fake_elf(0x130, [(".text", 0x110, 0x310), (".reginfo", 0x420, 0x18),
+                              (".data", 0x440, 0xE0)])
+        tr, out = run(jp)
+        assert not tr.failures, tr.failures
+        assert [(g["name"], g["start"], g["end"]) for g in out["segments"]] == \
+            [(".text", 0x110, 0x420), ("REGINFO", 0x420, 0x438),
+             ("LOAD", 0x438, 0x440), (".data", 0x440, 0x520)]
+        assert out["segments"][2]["perm"] == 6, "other fields are copied"
+        assert out["meta"]["entry"] == 0x130 and out["meta"]["input"] == "SLPS_254.18"
+        assert (out["meta"]["min_ea"], out["meta"]["max_ea"]) == (0x110, 0x520)
+        assert out["meta"]["imagebase"] == 0x100
+
+        # A gap that closes in the JP image is dropped and listed.
+        jp2 = fake_elf(0x130, [(".text", 0x110, 0x310), (".reginfo", 0x420, 0x18),
+                               (".data", 0x438, 0xE0)])
+        tr, out = run(jp2)
+        assert not tr.failures
+        assert [g["name"] for g in out["segments"]] == [".text", "REGINFO", ".data"]
+        assert [(e.where, e.us, e.text) for e in tr.dropped] == \
+            [("segments[LOAD@0x00000418]", 0x418, "empty gap between JP sections")]
+
+        # A section that the JP image lacks fails.
+        jp3 = fake_elf(0x130, [(".text", 0x110, 0x310), (".reginfo", 0x420, 0x18)])
+        tr, out = run(jp3)
+        assert [e.where for e in tr.failures] == ["segments[.data@0x00000420]"]
+
+        # A segment that is not a US section fails too.
+        bad = fake_elf(0x120, [(".text", 0x100, 0x2F0), (".reginfo", 0x400, 0x18),
+                               (".data", 0x420, 0xE0)])
+        tr, out = run(jp, bad)
+        assert any(e.where == "segments[.text@0x00000100]" for e in tr.failures)
+    finally:
+        shutil.rmtree(root)
+
+
+def test_ida_functions_and_names():
+    us = ida_us_elf()
+    jp = fake_elf(0x130, [(".text", 0x110, 0x310), (".reginfo", 0x420, 0x18),
+                          (".data", 0x440, 0xE0)])
+    rmap = synthetic_map()
+    rmap.functions.append(
+        FuncMatch(0x380, 0x3A0, "sub_380", 0x3A0, 0x3C0, "body-changed", "diff", 0.9, 0.9, "",
+                  [[0x380, 0x3A0, 0x3A0, "same"], [0x3C0, 0x3D0, 0x3E0, "diff"]]))
+    rmap._index()
+    funcs = [
+        ifunc(0x100, "sub_000100", [[0x100, 0x140], [0x210, 0x220]]),
+        ifunc(0x140, "sub_140", [[0x140, 0x180], [0x1C0, 0x1E0]]),
+        ifunc(0x180, "sub_000180", [[0x180, 0x1C0]]),
+        ifunc(0x340, "sub_340", [[0x340, 0x380]]),
+        ifunc(0x380, "sub_380", [[0x380, 0x3A0], [0x3C0, 0x3D0]]),
+    ]
+    names = {"256": "sub_000100", "260": "loc_000104", "272": "keep", "1280": "gone",
+             "528": "ignored"}
+    root = tempfile.mkdtemp()
+    try:
+        write(os.path.join(root, "ida_db.json"), json.dumps(ida_db_dict(funcs, names)))
+        tr = Translator(rmap, us, jp)
+        out = json.loads(idadb.handle(tr, root, switches=False)[idadb.FILE])
+        assert not tr.failures, tr.failures
+        got = {f["ea"]: f for f in out["functions"]}
+        assert list(got) == [0x110, 0x150, 0x1A8, 0x3A0], "unmatched dropped, order kept"
+        assert got[0x110]["name"] == "sub_000110"
+        assert got[0x110]["chunks"] == [[0x110, 0x150]], "unmapped chunk dropped"
+        assert got[0x150]["chunks"] == [[0x150, 0x190], [0x1D0, 0x1F0]], "same chunk keeps length"
+        assert got[0x1A8]["chunks"] == [[0x1A8, 0x1E8]], "body-changed uses the match span"
+        assert got[0x1A8]["name"] == "sub_0001A8"
+        assert got[0x3A0]["chunks"] == [[0x3A0, 0x3C0], [0x3E0, 0x3F0]], "other chunk: end()"
+        assert got[0x3A0]["name"] == "sub_380", "names that are not dummies stay"
+        assert got[0x150]["flags"] == 0 and got[0x150]["thunk"] is False
+        assert {e.where for e in tr.dropped} == {
+            "functions[ea=0x00000100]:chunk 0x00000210", "functions[ea=0x00000340]",
+            "names[1280]", "names[528]"}, tr.dropped
+        assert any(e.where == "functions[ea=0x00000180]" and e.jp == 0x1A8 for e in tr.notes)
+        assert out["names"] == {"272": "sub_000110", "276": "loc_000114", "288": "keep"}
+        assert list(out) == ["meta", "segments", "functions", "switches", "names"]
+
+        # Two functions on one JP address fail.
+        rmap2 = synthetic_map()
+        rmap2.functions[1].jp = 0x110
+        write(os.path.join(root, "ida_db.json"), json.dumps(ida_db_dict(funcs[:2], {})))
+        tr = Translator(rmap2, us, jp)
+        idadb.handle(tr, root, switches=False)
+        assert [e.where for e in tr.failures] == ["functions[ea=0x00000140]"]
+
+        # The CLI path fails on purpose until switches are translated.
+        tr = Translator(synthetic_map(), us, jp)
+        idadb.handle(tr, root)
+        assert [(e.file, e.where, e.us) for e in tr.failures] == [("ida_db.json", "switches", None)]
+    finally:
+        shutil.rmtree(root)
+
+
+def test_real_ida_identity():
+    us = ElfFile(US)
+    rmap = identity_map(US, os.path.join(CONFIG, "ida_db.json"))
+    tr = Translator(rmap, us, us)
+    raw = idadb.handle(tr, CONFIG, switches=False)[idadb.FILE]
+    assert not tr.failures and not tr.dropped and not tr.rederived, tr.failures[:3]
+    with open(os.path.join(CONFIG, "ida_db.json"), "rb") as fp:
+        src = fp.read()
+    a, b = json.loads(src), json.loads(raw)
+    assert list(a) == list(b)
+    for k in ("imagebase", "entry", "min_ea", "max_ea"):
+        assert a["meta"][k] == b["meta"][k], k
+    assert b["meta"]["input"] == "SLPS_254.18"
+    assert a["segments"] == b["segments"]
+    assert a["functions"] == b["functions"]
+    assert a["names"] == b["names"] and list(a["names"]) == list(b["names"])
+    assert b["switches"] == []
+    assert raw.endswith(b"\n") == src.endswith(b"\n")
+    assert b"\n" not in raw.rstrip(b"\n"), "one line, like the US file"
+
+
 def test_real_pair():
     from regionconfig.__main__ import main
-    out = tempfile.mkdtemp()
+    root = tempfile.mkdtemp()
     try:
         mp = os.path.join(ROOT, "tmp", "regionmap", "regionmap.json")
         if not os.path.isfile(mp):
             print("SKIP: tmp/regionmap/regionmap.json missing")
             return
-        argv = ["translate", "--out", out]
-        assert main(argv) == 0
-        assert main(["check", "--out", out]) == 0
+        rmap, us, jp = RegionMap.load(mp), ElfFile(US), ElfFile(JP)
+        verify_inputs(rmap, us, jp)
+        out = os.path.join(root, "out")
+
+        # The CLI list fails once, on the switch placeholder, and writes nothing.
+        log = []
+        assert run_translate(Translator(rmap, us, jp), HANDLERS, CONFIG, out, log.append) == 1
+        fails = [l for l in log if l.startswith("FAIL")]
+        assert len(fails) == 1 and fails[0].startswith("FAIL ida_db.json switches us=none"), log
+        assert not os.path.exists(out)
+        assert main(["translate", "--out", out]) == 1 and not os.path.exists(out)
+
+        assert run_translate(Translator(rmap, us, jp), NO_SWITCH_HANDLERS, CONFIG, out,
+                             [].append) == 0
+        assert run_check(Translator(rmap, us, jp), NO_SWITCH_HANDLERS, CONFIG, out,
+                         [].append) == 0
         man = json.load(open(os.path.join(out, "manifest.json")))
         assert man["files"]["hooks.json"] == {"kept": 9, "dropped": 0, "rederived": 0}
         assert man["files"]["manual_symbols.json"] == {"kept": 10, "dropped": 0, "rederived": 0}
@@ -299,8 +472,30 @@ def test_real_pair():
         assert all(d["reason"] for d in man["dropped"])
         with open(os.path.join(out, "hooks.json")) as fp:
             assert json.load(fp)["0x0034BCD8"] == "hook_sound_load"
+
+        with open(os.path.join(CONFIG, "ida_db.json")) as fp:
+            us_db = json.load(fp)
+        with open(os.path.join(out, "ida_db.json")) as fp:
+            jp_db = json.load(fp)
+        by_ea = {f["ea"]: f for f in jp_db["functions"]}
+        mapped = [f for f in rmap.functions if f.jp is not None]
+        assert len(jp_db["functions"]) == len(mapped) == len(by_ea)
+        for f in rmap.functions:
+            if f.us in (0x29A798, 0x2A78A0, 0x2F7490):
+                assert f.jp in by_ea and by_ea[f.jp]["chunks"] == [[f.jp, f.jp_end]], hex(f.us)
+        n_seg = len(jp_db["segments"])
+        gaps = [d for d in man["dropped"] if d["where"].startswith("segments[")]
+        assert n_seg + len(gaps) == len(us_db["segments"])
+        lo, hi = jp_db["segments"][0]["start"], jp_db["segments"][-1]["end"]
+        assert (jp_db["meta"]["min_ea"], jp_db["meta"]["max_ea"]) == (lo, hi)
+        assert jp_db["meta"]["entry"] == jp.entry
+        for g, h in zip(jp_db["segments"], jp_db["segments"][1:]):
+            assert g["end"] <= h["start"]
+        print("ida_db: functions kept %d dropped %d, names kept %d dropped %d, segments %d"
+              % (len(jp_db["functions"]), len(us_db["functions"]) - len(jp_db["functions"]),
+                 len(jp_db["names"]), len(us_db["names"]) - len(jp_db["names"]), n_seg))
     finally:
-        shutil.rmtree(out)
+        shutil.rmtree(root)
 
 
 test_lookups()
@@ -308,9 +503,12 @@ test_rename()
 test_fail_and_drop()
 test_duplicates_and_order()
 test_verify_inputs()
+test_ida_segments()
+test_ida_functions_and_names()
 
 if os.path.isfile(US):
     test_real_identity()
+    test_real_ida_identity()
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_pair()
     print("PASS: regionconfig (synthetic + real binaries)")
