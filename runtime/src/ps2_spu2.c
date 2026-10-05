@@ -2,7 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <SDL3/SDL.h>
+#include "ps2_nustream.h"
+#include "ps2_lock.h"
 
 #define SPU2_RAM_SIZE   (2u * 1024u * 1024u)
 #define SPU2_VOICES     48u
@@ -64,9 +65,10 @@ typedef struct {
 } spu2_voice;
 
 static spu2_voice spu2_v[SPU2_VOICES];
-static SDL_SpinLock spu2_lock;
-void ps2_spu2_command_lock(void) { SDL_LockSpinlock(&spu2_lock); }
-void ps2_spu2_command_unlock(void) { SDL_UnlockSpinlock(&spu2_lock); }
+/* Not reentrant. */
+static ps2_lock spu2_lock = PS2_LOCK_INIT;
+void ps2_spu2_command_lock(void) { ps2_lock_take(&spu2_lock); }
+void ps2_spu2_command_unlock(void) { ps2_lock_release(&spu2_lock); }
 u8 ps2_spu2_voice_status(u32 i) {
     if(i>=48||!spu2_v[i].on) return 0;
     if(spu2_v[i].phase==ADSR_RELEASE) return spu2_v[i].env?2:0;
@@ -276,13 +278,12 @@ static void voice_sample(spu2_voice *v, u32 i, int *l, int *r) {
     adsr_step(v);
 }
 
-#include "ps2_nustream.h"
 void ps2_spu2_mix(s16 *out, u32 n) {
     u32 k, i;
     s16 volumes[48][2];
     u64 stream_mask = ps2_nustream_voice_mask();
     if (!ps2_spu2_ram) { memset(out, 0, (size_t)n * 4u); return; }
-    SDL_LockSpinlock(&spu2_lock);
+    ps2_lock_take(&spu2_lock);
     for (i = 0; i < 48; i++) {
         volumes[i][0] = spu2_v[i].voll;
         volumes[i][1] = spu2_v[i].volr;
@@ -312,7 +313,7 @@ void ps2_spu2_mix(s16 *out, u32 n) {
         out[k * 2 + 1] = clamp16(r);
     }
     spu2_frames += n;
-    SDL_UnlockSpinlock(&spu2_lock);
+    ps2_lock_release(&spu2_lock);
     ps2_nustream_mix(out, n, volumes);
 }
 

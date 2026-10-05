@@ -1,9 +1,9 @@
 #include "ps2_nustream.h"
 #include "ps2_hle.h"
 #include "ps2_vfs.h"
-#include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ps2_lock.h"
 
 void ps2_spu2_decode_block(const u8 *, s16 *, int *, int *, u32 *);
 typedef struct {
@@ -18,7 +18,8 @@ typedef struct {
     s16 previous_block[2];
 } nu_stream;
 static nu_stream streams[8];
-static SDL_SpinLock stream_lock;
+/* Not reentrant. */
+static ps2_lock stream_lock = PS2_LOCK_INIT;
 
 static u32 disk_offset(const nu_stream *s, u32 byte, u32 ch) {
     return byte / s->interleave * s->interleave * s->channels
@@ -52,7 +53,7 @@ void ps2_nustream_command(u32 cmd, const u32 *a, const char *name) {
         ps2_log("nustream: open slot=%u file='%s' offset=%08X bytes/ch=%u channels=%u interleave=%u pitch=%u result=%s",
                 slot, name, a[6], a[1], a[2], a[3], a[4], data ? "loaded" : "FAILED");
     }
-    SDL_LockSpinlock(&stream_lock);
+    ps2_lock_take(&stream_lock);
     if (cmd == 2) {
         for (u32 i = 0; i < 8; i++) { free(streams[i].data); memset(&streams[i], 0, sizeof streams[i]); }
     } else if (slot < 8) {
@@ -76,7 +77,7 @@ void ps2_nustream_command(u32 cmd, const u32 *a, const char *name) {
         case 23: s->pitch = a[1] & 0x3fff; break;
         }
     }
-    SDL_UnlockSpinlock(&stream_lock);
+    ps2_lock_release(&stream_lock);
 }
 
 int ps2_nustream_selftest(void) {
@@ -162,36 +163,36 @@ int ps2_nustream_file_selftest(const char *disc) {
 }
 
 void ps2_nustream_status(u32 slot, u32 *position, u32 *ended) {
-    SDL_LockSpinlock(&stream_lock);
+    ps2_lock_take(&stream_lock);
     nu_stream *s = &streams[slot];
     *position = s->ended ? ~0u : (u32)((s->phase >> 12) / 28 * 16 * s->channels);
     *ended = s->ended;
-    SDL_UnlockSpinlock(&stream_lock);
+    ps2_lock_release(&stream_lock);
 }
 
 void ps2_nustream_report(u32 slot) {
-    SDL_LockSpinlock(&stream_lock);
+    ps2_lock_take(&stream_lock);
     nu_stream *s = &streams[slot];
     ps2_log("nustream: audio slot=%u ready=%u playing=%u paused=%u voices=%u,%u loop=%08X mixed=%llu audible=%llu",
             slot, s->ready, s->playing, s->paused, s->voice[0], s->voice[1], (u32)s->loop,
             (unsigned long long)s->mixed, (unsigned long long)s->audible);
-    SDL_UnlockSpinlock(&stream_lock);
+    ps2_lock_release(&stream_lock);
 }
 
 u64 ps2_nustream_voice_mask(void) {
     u64 mask = 0;
-    SDL_LockSpinlock(&stream_lock);
+    ps2_lock_take(&stream_lock);
     for (u32 i = 0; i < 8; i++) if (streams[i].ready) {
         for (u32 ch = 0; ch < streams[i].channels; ch++)
             if (streams[i].voice[ch] < 48) mask |= 1ull << streams[i].voice[ch];
     }
-    SDL_UnlockSpinlock(&stream_lock);
+    ps2_lock_release(&stream_lock);
     return mask;
 }
 
 static s16 saturate(int v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : (s16)v; }
 void ps2_nustream_mix(s16 *out, u32 frames, const s16 volumes[48][2]) {
-    SDL_LockSpinlock(&stream_lock);
+    ps2_lock_take(&stream_lock);
     for (u32 i = 0; i < 8; i++) {
         nu_stream *s = &streams[i];
         if (!s->ready || !s->playing || s->paused || s->ended) continue;
@@ -233,5 +234,5 @@ void ps2_nustream_mix(s16 *out, u32 frames, const s16 volumes[48][2]) {
             s->phase += s->pitch;
         }
     }
-    SDL_UnlockSpinlock(&stream_lock);
+    ps2_lock_release(&stream_lock);
 }
