@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "ps2_addr.h"
 #include "ps2_hle.h"
 #include "ps2_hook.h"
 #include "ps2_mod.h"
@@ -563,11 +564,6 @@ const ac5_api *ps2_mod_api_at(unsigned i) {
     return i < ps2_mod_count() ? api_of(&mods[load_order[i]]) : NULL;
 }
 
-#define AC5_ULZ_SETUP  0x00102A78u
-
-static const u32 ulz_setup_code[] = {
-    0x8CA20004u, 0x3C0700FFu, 0x34E7FFFFu, 0x24080001u,
-};
 static u64 archive_served, archive_passed;
 
 static int archive_member_setup(ps2_ctx *ctx, void *user) {
@@ -575,7 +571,7 @@ static int archive_member_setup(ps2_ctx *ctx, void *user) {
     u32 loader = state - 4u, slot, member, count, table, capacity;
     u8 mode;
     (void)user;
-    ps2_hook_call_original(AC5_ULZ_SETUP, ctx);
+    ps2_hook_call_original(PS2_A(AC5_ULZ_SETUP), ctx);
     mode = ps2_r8(loader);
     slot = ps2_r32(loader + 48u);
     if ((mode != 4 && mode != 5) || slot >= 7u) return 1;
@@ -609,13 +605,15 @@ static int archive_member_setup(ps2_ctx *ctx, void *user) {
 }
 
 static void archive_driver_install(void) {
-    for (unsigned i = 0; i < sizeof ulz_setup_code / sizeof ulz_setup_code[0]; i++) {
-        if (ps2_r32(AC5_ULZ_SETUP + 4u * i) == ulz_setup_code[i]) continue;
-        ps2_vfs_pac_revert("the code at 00102A78 is not DATA.PAC's decompressor "
-                           "set-up this runtime was written against");
+    if (!ps2_addr_code_matches(PS2_AID_AC5_ULZ_SETUP)) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "the code at %08X is not DATA.PAC's decompressor set-up this "
+                 "runtime was written against", PS2_A(AC5_ULZ_SETUP));
+        ps2_vfs_pac_revert(why);
         return;
     }
-    if (ps2_hook_replace(AC5_ULZ_SETUP, archive_member_setup, NULL, INT_MAX,
+    if (ps2_hook_replace(PS2_A(AC5_ULZ_SETUP), archive_member_setup, NULL, INT_MAX,
                          "mod host (DATA.PAC)") < 0) {
         ps2_vfs_pac_revert("DATA.PAC's decompressor could not be hooked; the "
                            "hook: line above says why");

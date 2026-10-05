@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "ps2_addr.h"
 #include "ps2_hook.h"
 
 #include <stdio.h>
@@ -504,9 +505,9 @@ static int selftest_hook(ps2_ctx *ctx, void *user) {
 
 void ps2_hook_selftest_attach(void);
 void ps2_hook_selftest_attach(void) {
-    if (ps2_hook_before(0x0011DB30u, selftest_hook, NULL, 0,
+    if (ps2_hook_before(PS2_A(AC5_HOOK_SELFTEST), selftest_hook, NULL, 0,
                         "hook-selftest") > 0)
-        ps2_log("hook: self-test attached to 0011DB30");
+        ps2_log("hook: self-test attached to %08X", PS2_A(AC5_HOOK_SELFTEST));
 }
 
 static void report_chain(const hook_entry *chain, unsigned n, const char *kind) {
@@ -517,8 +518,8 @@ static void report_chain(const hook_entry *chain, unsigned n, const char *kind) 
 
 void ps2_hook_report(void) {
     if (selftest_calls)
-        ps2_log("hook: self-test saw %llu call(s) of 0011DB30",
-                (unsigned long long)selftest_calls);
+        ps2_log("hook: self-test saw %llu call(s) of %08X",
+                (unsigned long long)selftest_calls, PS2_A(AC5_HOOK_SELFTEST));
     if (!nsites && !nredirects) return;
     ps2_log("---- hooks ----");
     for (unsigned i = 0; i < nsites; i++) {

@@ -1,12 +1,11 @@
 #include "ps2_runtime.h"
+#include "ps2_addr.h"
 #include "ps2_patch.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define CODE_END 0x003992C0u
 
 enum { P_ACTIVE, P_CONFLICT, P_REMOVED };
 
@@ -58,7 +57,7 @@ static int in_code(u32 addr, u32 len) {
     else
         return 0;
     ps2_text_bounds(&lo, &hi);
-    if (hi < CODE_END) hi = CODE_END;
+    if (hi < PS2_A(AC5_CODE_END)) hi = PS2_A(AC5_CODE_END);
     return phys < hi && phys + len > lo;
 }
 

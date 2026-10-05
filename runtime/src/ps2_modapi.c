@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "ps2_addr.h"
 #include "ps2_hle.h"
 #include "ps2_hook.h"
 #include "ps2_modapi.h"
@@ -326,9 +327,6 @@ static int api_on_shutdown(ac5_field_fn fn, void *user) {
     return cb_add(CB_SHUTDOWN, (void *)fn, user, 0, 0);
 }
 
-#define AC5_SCENE_DISPATCH 0x0031CF00u
-#define AC5_MAIN_MACHINE   0x004459ACu
-
 static struct { u32 obj; int key; } machines[8];
 static unsigned nmachines;
 static int events_hooked;
@@ -360,7 +358,7 @@ static int scene_dispatch_hook(ps2_ctx *ctx, void *user) {
             current = save;
         }
     }
-    if (obj == ps2_r32(AC5_MAIN_MACHINE)) {
+    if (obj == ps2_r32(PS2_A(AC5_SCENE_ROOT_PTR))) {
         frames_seen++;
         for (unsigned i = 0; i < ncbs; i++) {
             mod_cb cb = cbs[i];
@@ -377,8 +375,8 @@ static int scene_dispatch_hook(ps2_ctx *ctx, void *user) {
 
 static int events_hook(void) {
     if (events_hooked) return 0;
-    if (ps2_hook_before(AC5_SCENE_DISPATCH, scene_dispatch_hook, NULL, INT_MAX,
-                        "mod host (frame and scene events)") < 0)
+    if (ps2_hook_before(PS2_A(AC5_SCENE_DISPATCH), scene_dispatch_hook, NULL,
+                        INT_MAX, "mod host (frame and scene events)") < 0)
         return -1;
     events_hooked = 1;
     return 0;

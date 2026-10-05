@@ -170,6 +170,15 @@ def test_real_tree():
         assert main(["lint"]) == 0
 
 
+def test_real_tree_strict():
+    # every listed address in the runtime sources goes through PS2_A
+    lines = []
+    assert lint.run(ROOT, strict=True, log=lines.append) == 0, lines
+    assert lines[-1].endswith("0 pending migration, 0 unknown"), lines
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert main(["lint", "--strict"]) == 0
+
+
 class FakeElf:
     def __init__(self, sections, words):
         self.sections = [SimpleNamespace(name=n, addr=a, size=z, is_alloc=True)
@@ -507,6 +516,7 @@ def test_gen_real():
 test_parser()
 test_lint_tree()
 test_real_tree()
+test_real_tree_strict()
 test_gen_resolution()
 test_gen_verdict_gate()
 test_gen_words_and_selfchecks()
