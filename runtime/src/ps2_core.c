@@ -253,6 +253,19 @@ void ps2_dispatch(ps2_ctx *ctx, u32 addr) {
     if (PS2_LIKELY(off < (ps2_text_hi - ps2_text_lo))) {
         ps2_fn f = ps2_fn_index[off >> 2];
         if (PS2_LIKELY(f != NULL)) {
+            f(ctx);
+            return;
+        }
+    }
+    ps2_unknown_target(ctx, addr);
+}
+
+void ps2_dispatch_tail(ps2_ctx *ctx) {
+    u32 addr = ctx->jump_target;
+    u32 off = addr - ps2_text_lo;
+    if (PS2_LIKELY(off < (ps2_text_hi - ps2_text_lo))) {
+        ps2_fn f = ps2_fn_index[off >> 2];
+        if (PS2_LIKELY(f != NULL)) {
             PS2_TAIL return f(ctx);
         }
     }

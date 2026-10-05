@@ -679,7 +679,8 @@ class Emitter:
                 self.w(out, "%s(ctx);" % fname(target), ind)
             return
         if tail:
-            self.w(out, "{ PS2_TAIL return ps2_dispatch(ctx, 0x%08Xu); }" % target, ind)
+            self.w(out, "{ ctx->jump_target = 0x%08Xu; "
+                   "PS2_TAIL return ps2_dispatch_tail(ctx); }" % target, ind)
         else:
             self.w(out, "ps2_dispatch(ctx, 0x%08Xu);" % target, ind)
 
@@ -727,7 +728,8 @@ class Emitter:
                 self.w(out, "default: break;", ind + 2)
                 self.w(out, "}", ind + 1)
             self.w(out, "ctx->pc = 0x%08Xu;" % a, ind + 1)
-            self.w(out, "{ PS2_TAIL return ps2_dispatch(ctx, _t); } }", ind + 1)
+            self.w(out, "{ ctx->jump_target = _t; "
+                   "PS2_TAIL return ps2_dispatch_tail(ctx); } }", ind + 1)
             return
 
         if cat == CAT_JUMPR and ins.name == "JALR":

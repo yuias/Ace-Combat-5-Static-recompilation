@@ -118,6 +118,9 @@ typedef struct ps2_ctx {
     u32 vu0_flag_slot, vu0_flag_pending;
     u32 current_thread;
     u32 in_interrupt;
+    /* Target for ps2_dispatch_tail. Clang's musttail needs caller and callee
+       to have the same parameters, so the address cannot be an argument. */
+    u32 jump_target;
 } ps2_ctx;
 
 extern const ps2_reg128 ps2_zero_q;
@@ -357,6 +360,7 @@ void ps2_syscall(ps2_ctx *ctx);
 void ps2_trap(ps2_ctx *ctx, u32 insn);
 void ps2_unimplemented(ps2_ctx *ctx, u32 pc, u32 insn);
 void ps2_dispatch(ps2_ctx *ctx, u32 addr);
+void ps2_dispatch_tail(ps2_ctx *ctx);
 ps2_fn ps2_dispatch_lookup(u32 addr);
 int    ps2_dispatch_redirect(u32 addr, ps2_fn fn);
 void ps2_unknown_target(ps2_ctx *ctx, u32 addr);
