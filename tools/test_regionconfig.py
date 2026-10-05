@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import struct
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ ROOT = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 
 from ps2recomp.elf import ElfFile
-from regionconfig import idadb
+from regionconfig import idadb, seeds
 from regionconfig.__main__ import HANDLERS, generate, run_check, run_translate, verify_inputs
 from regionconfig.core import Translator, fmt_like
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
@@ -21,8 +22,9 @@ US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
 JP = os.path.join(ROOT, "tmp", "jp", "SLPS_254.18")
 CONFIG = os.path.join(ROOT, "config")
 
-# The synthetic tests have no ida_db.json source or ELF, so they skip that handler.
-SYMBOL_HANDLERS = [h for h in HANDLERS if h is not idadb.handle]
+# The synthetic tests have no ida_db.json or ida_seeds.json source or ELF, so they
+# skip those handlers.
+SYMBOL_HANDLERS = [h for h in HANDLERS if h not in (idadb.handle, seeds.handle)]
 
 SYMBOL_FILES = ("hooks.json", "overrides.json", "manual_symbols.json",
                 "sdk_symbols.json", "game_symbols.txt")
@@ -555,6 +557,138 @@ def test_real_ida_identity():
     assert full["switches"] == a["switches"]
 
 
+ADDIU_SP_NEG = 0x27BDFFF0   # addiu sp, sp, -16
+ADDIU_SP_POS = 0x27BD0010   # addiu sp, sp, 16
+LUI_AT = 0x3C013F80
+MTC1_AT = 0x44810000
+J_TAIL = 0x08000100   # j 0x400
+
+
+def seeds_map():
+    """JP-only stretches: 0x150-0x190 (no function), 0x1B0-0x1F0 (inside the
+    span of body-changed sub_180, whose JP body grew) and 0x230-0x330."""
+    ranges = [Range(0x100, 0x140, 0x10, ".text", "func", "high"),
+              Range(0x180, 0x1A0, 0x10, ".text", "func", "high"),
+              Range(0x1C0, 0x200, 0x30, ".text", "func", "high")]
+    unc = [Uncertain(0x140, 0x180, ".text", [], "content differs")]
+    funcs = [FuncMatch(0x100, 0x140, "sub_100", 0x110, 0x150, "same", "exact", 1.0, 1.0),
+             FuncMatch(0x180, 0x1C0, "sub_180", 0x190, 0x1F0, "body-changed", "diff", 0.9, 0.9),
+             FuncMatch(0x1C0, 0x200, "sub_1C0", 0x1F0, 0x230, "same", "exact", 1.0, 1.0)]
+    secs = [{"name": ".text", "us_start": 0x100, "us_end": 0x200,
+             "jp_start": 0x110, "jp_end": 0x330, "nobits": False}]
+    return RegionMap({"file": "US", "sha256": "aa"}, {"file": "JP", "sha256": "bb"},
+                     secs, ranges, unc, funcs, {})
+
+
+def seeds_words():
+    w = {}
+    # An entry after a return and its delay slot: the seed.
+    w.update({0x154: JR_RA, 0x158: ADDIU_SP_POS, 0x15C: ADDIU_SP_NEG})
+    # The same prologue inside the grown body of sub_180: not a seed.
+    w.update({0x1B0: JR_RA, 0x1B4: ADDIU_SP_POS, 0x1B8: ADDIU_SP_NEG})
+    # A nop in the delay slot and padding before the entry.
+    w.update({0x234: JR_RA, 0x238: 0, 0x23C: 0, 0x240: ADDIU_SP_NEG})
+    # Setup words before the addiu: part of the function that starts at the lui.
+    w.update({0x270: JR_RA, 0x274: 0, 0x278: LUI_AT, 0x27C: MTC1_AT, 0x280: ADDIU_SP_NEG})
+    # An addiu in the delay slot of a jr.
+    w.update({0x2BC: JR_RA, 0x2C0: ADDIU_SP_NEG})
+    # A positive adjustment is an epilogue, not a prologue.
+    w.update({0x2E0: JR_RA, 0x2E4: 0, 0x2E8: ADDIU_SP_POS})
+    w.update({0x2F0: JR_RA, 0x2F4: 0, 0x2F8: ADDIU_SP_POS})
+    # A function ending in a tail-call j: a data pointer may enter after it
+    # (0x30C), but the prologue rule must not (0x31C).
+    w.update({0x300: J_TAIL, 0x304: ADDIU_SP_POS, 0x308: 0, 0x30C: LUI_AT})
+    w.update({0x310: J_TAIL, 0x314: ADDIU_SP_POS, 0x318: 0, 0x31C: ADDIU_SP_NEG})
+    return w
+
+
+def seeds_data():
+    """(.data words, .rodata words). Targets: a leaf entry (0x2E8), the lui
+    entry that the prologue rule rejects (0x278), a mid-function word (0x280),
+    a delay slot (0x2C0), a function span (0x1B8), outside JP-only code (0x400)
+    an unaligned word and a function entry after a tail-call j (0x30C). The jump table .rodata must not seed 0x2F8."""
+    return ([0x15C, 0x278, 0x2E8, 0x280, 0x2C0, 0x1B8, 0x400, 0x2E9, 0x2E8, 0x30C], [0x2F8])
+
+
+def fake_jp(words):
+    def sec(name, vals):
+        return SimpleNamespace(name=name, is_alloc=True, is_exec=False,
+                               data=struct.pack("<%dI" % len(vals), *vals))
+    data, rodata = seeds_data()
+    return SimpleNamespace(word=lambda a: words.get(a, 0),
+                           sections=[sec(".data", data), sec(".rodata", rodata)])
+
+
+def test_seeds_logic():
+    tr = Translator(seeds_map(), None, None)
+    words = seeds_words()
+    word = lambda a: words.get(a, 0)
+    stretches = seeds.jp_only_stretches(tr.rmap)
+    assert stretches == [(0x150, 0x190), (0x1B0, 0x1F0), (0x230, 0x330)], stretches
+    spans = seeds.merged_spans(tr)
+    assert spans == [(0x110, 0x150), (0x190, 0x230)], spans
+    assert seeds.prologue_seeds(word, stretches, spans, set()) == [0x15C, 0x240]
+    # Already a seed: ignored.
+    assert seeds.prologue_seeds(word, stretches, spans, {0x15C}) == [0x240]
+    # Pointers: the lui entry and the leaf entry; not the span, mid-function,
+    # delay slot, outside or unaligned targets, nor an already known one.
+    data, _ = seeds_data()
+    assert seeds.pointer_seeds(word, data, stretches, spans, set()) == [0x15C, 0x278, 0x2E8, 0x30C]
+    assert seeds.pointer_seeds(word, data, stretches, spans, {0x15C}) == [0x278, 0x2E8, 0x30C]
+    assert list(seeds.data_pointers(fake_jp(words))) == [v for v in data if not v & 3]
+
+
+def test_seeds_handler():
+    root = tempfile.mkdtemp()
+    try:
+        # xref: kept, uncertain, body-changed (unmapped part of sub_180), outside.
+        src = {"xref": [0x100, 0x150, 0x1A8, 0x200], "ptr": [0x1C4, 0x104],
+               "flow": [0x100, 0x108, 0x10C, 0x1C0]}
+        write(os.path.join(root, "ida_seeds.json"), json.dumps(src) + "\n")
+        words = seeds_words()
+        tr = Translator(seeds_map(), None, fake_jp(words))
+        outputs = generate(tr, [seeds.handle], root, lambda *a: None)
+        assert outputs is not None and not tr.failures
+        out = json.loads(outputs["ida_seeds.json"])
+        assert list(out) == ["xref", "ptr", "flow", "rederived"]
+        assert out["xref"] == [0x110] and out["ptr"] == [0x114, 0x1F4]
+        assert out["flow"] == [0x110, 0x118, 0x11C, 0x1F0], "sorted, translated"
+        assert out["rederived"] == [0x15C, 0x240, 0x278, 0x2E8, 0x30C]
+        assert outputs["ida_seeds.json"].endswith(b"\n")
+        man = json.loads(outputs["manifest.json"])
+        assert man["files"]["ida_seeds.json"] == {"kept": 7, "dropped": 3, "rederived": 5}
+        reasons = [d["reason"] for d in man["dropped"]]
+        assert [d["where"] for d in man["dropped"]] == [
+            "xref:0x00000150", "xref:0x000001A8", "xref:0x00000200"]
+        assert reasons[0].startswith("uncertain")
+        assert reasons[1] == "changed code in body-changed sub_180"
+        assert reasons[2] == "outside every mapped range"
+        assert [(r["where"], r["us"], r["jp"], r["how"]) for r in man["rederived"]] == [
+            ("rederived:0x0000015C", None, "0x0000015C", "jp-only prologue"),
+            ("rederived:0x00000240", None, "0x00000240", "jp-only prologue"),
+            ("rederived:0x00000278", None, "0x00000278", "jp-only data pointer"),
+            ("rederived:0x000002E8", None, "0x000002E8", "jp-only data pointer"),
+            ("rederived:0x0000030C", None, "0x0000030C", "jp-only data pointer")]
+    finally:
+        shutil.rmtree(root)
+
+
+def test_real_seeds_identity():
+    us = ElfFile(US)
+    rmap = identity_map(US, os.path.join(CONFIG, "ida_db.json"))
+    tr = Translator(rmap, us, us)
+    outputs = generate(tr, [seeds.handle], CONFIG, lambda *a: None)
+    assert outputs is not None and not tr.failures
+    assert not tr.dropped and not tr.rederived, (tr.dropped[:3], tr.rederived[:3])
+    with open(os.path.join(CONFIG, "ida_seeds.json"), "rb") as fp:
+        raw = fp.read()
+    a, b = json.loads(raw), json.loads(outputs["ida_seeds.json"])
+    for k in seeds.LISTS:
+        assert a[k] == b[k], k
+    assert b[seeds.REDERIVED] == [] and list(b) == list(a) + [seeds.REDERIVED]
+    assert outputs["ida_seeds.json"].endswith(b"\n") == raw.endswith(b"\n")
+
+
 def test_real_pair():
     from regionconfig.__main__ import main
     root = tempfile.mkdtemp()
@@ -603,6 +737,31 @@ def test_real_pair():
         assert jp_db["meta"]["entry"] == jp.entry
         for g, h in zip(jp_db["segments"], jp_db["segments"][1:]):
             assert g["end"] <= h["start"]
+        # Seeds: every list entry is accounted for, and each rederived address
+        # is a word-aligned JP .text entry outside every mapped function.
+        with open(os.path.join(CONFIG, "ida_seeds.json")) as fp:
+            us_seeds = json.load(fp)
+        with open(os.path.join(out, "ida_seeds.json")) as fp:
+            jp_seeds = json.load(fp)
+        fc = man["files"]["ida_seeds.json"]
+        assert fc["kept"] + fc["dropped"] == sum(len(us_seeds[k]) for k in seeds.LISTS)
+        assert fc["kept"] == sum(len(jp_seeds[k]) for k in seeds.LISTS)
+        for k in seeds.LISTS:
+            assert jp_seeds[k] == sorted(set(jp_seeds[k])), k
+        listed = [int(r["jp"], 16) for r in man["rederived"] if r["file"] == "ida_seeds.json"]
+        assert listed == jp_seeds["rederived"] and fc["rederived"] == len(listed)
+        spans = seeds.merged_spans(Translator(rmap, us, jp))
+        text = jp.section(".text")
+        for a in listed:
+            assert a % 4 == 0 and text.addr <= a < text.addr + text.size, hex(a)
+            assert not seeds._in_spans(spans, a), hex(a)
+            assert seeds.follows_return(jp.word, a, tail_jump=True), hex(a)
+        hows = {r["jp"]: r["how"] for r in man["rederived"] if r["file"] == "ida_seeds.json"}
+        for a in listed:
+            if hows["0x%08X" % a] == "jp-only prologue":
+                assert (jp.word(a) >> 16) == 0x27BD and jp.word(a) & 0x8000, hex(a)
+        print("ida_seeds: kept %d dropped %d rederived %d"
+              % (fc["kept"], fc["dropped"], len(listed)))
         print("ida_db: functions kept %d dropped %d, names kept %d dropped %d, segments %d"
               % (len(jp_db["functions"]), len(us_db["functions"]) - len(jp_db["functions"]),
                  len(jp_db["names"]), len(us_db["names"]) - len(jp_db["names"]), n_seg))
@@ -618,10 +777,13 @@ test_verify_inputs()
 test_ida_segments()
 test_ida_functions_and_names()
 test_switch_logic()
+test_seeds_logic()
+test_seeds_handler()
 
 if os.path.isfile(US):
     test_real_identity()
     test_real_ida_identity()
+    test_real_seeds_identity()
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_pair()
     print("PASS: regionconfig (synthetic + real binaries)")

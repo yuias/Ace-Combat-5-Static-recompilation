@@ -11,7 +11,7 @@ import regions
 from ps2recomp.elf import ElfFile
 from regionmap import RegionMap
 
-from . import idadb, symbols
+from . import idadb, seeds, symbols
 from .core import Translator, display_path, print_failures, run_handlers, totals
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +24,7 @@ HANDLERS = [
     symbols.handle_sdk_symbols,
     symbols.handle_game_symbols,
     idadb.handle,
+    seeds.handle,
 ]
 
 
