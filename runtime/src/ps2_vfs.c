@@ -655,32 +655,34 @@ static int pname_cmp_name(const void *a, const void *b) {
 }
 
 static int names_loaded;
+static char names_dir[256] = "config";
 
-static void names_load(void) {
-    static const char *where[] = { NULL, "config/pac_names.txt",
-                                   "pac_names.txt", "../config/pac_names.txt" };
+void ps2_vfs_set_config_dir(const char *dir) {
+    if (dir && *dir) snprintf(names_dir, sizeof names_dir, "%s", dir);
+}
+
+/* 1 = loaded, 0 = cannot open, -1 = table is for another DATA.PAC. */
+static int names_read(const char *path, u32 *cap) {
     char line[512];
-    FILE *fp = NULL;
-    u32 cap = 0;
-    if (names_loaded || !pac) return;
-    names_loaded = 1;
-    where[0] = getenv("PS2_MOD_NAMES");
-    for (unsigned i = 0; i < sizeof where / sizeof where[0]; i++) {
-        if (!where[i] || !*where[i]) continue;
-        fp = fopen(where[i], "r");
-        if (fp) { ps2_log("vfs: archive names from %s", where[i]); break; }
-    }
-    if (!fp) {
-        ps2_log("vfs: no pac_names.txt, so files inside DATA.PAC can only be "
-                "named by position (BIN/DATA.PAC/<member>/#<index>).  "
-                "Generate it with: python -m modkit.export_names --disc DIR "
-                "--names datapack.bin -o config/pac_names.txt");
-        return;
-    }
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
     while (fgets(line, sizeof line, fp)) {
         unsigned long m, k;
         char *p = line, *end, *name;
         size_t len;
+        /* A table from the other region has a different member layout, and
+           the bare pac_names.txt fallback would otherwise pick it up. */
+        if (!strncmp(p, "# members:", 10)) {
+            unsigned long n = strtoul(p + 10, &end, 10);
+            if (end != p + 10 && n != pac_count) {
+                ps2_log("vfs: %s is for a DATA.PAC with %lu members; this "
+                        "disc has %u; skipped", path, n, (unsigned)pac_count);
+                for (u32 i = 0; i < npnames; i++) free(pnames[i].name);
+                npnames = 0;
+                fclose(fp);
+                return -1;
+            }
+        }
         if (*p == '#') continue;
         m = strtoul(p, &end, 10);
         if (end == p) continue;
@@ -694,10 +696,10 @@ static void names_load(void) {
                        || name[len - 1] == ' ' || name[len - 1] == '\t'))
             name[--len] = 0;
         if (!len || m >= pac_count) continue;
-        if (npnames == cap) {
+        if (npnames == *cap) {
             pac_name *grown;
-            cap = cap ? cap * 2u : 16384u;
-            grown = (pac_name *)realloc(pnames, cap * sizeof *pnames);
+            *cap = *cap ? *cap * 2u : 16384u;
+            grown = (pac_name *)realloc(pnames, *cap * sizeof *pnames);
             if (!grown) ps2_fatal("vfs: out of memory loading archive names");
             pnames = grown;
         }
@@ -707,6 +709,37 @@ static void names_load(void) {
         npnames++;
     }
     fclose(fp);
+    return 1;
+}
+
+static void names_load(void) {
+    char own[sizeof names_dir + 16], up[sizeof names_dir + 20];
+    const char *where[4];
+    u32 cap = 0;
+    int found = 0;
+    if (names_loaded || !pac) return;
+    names_loaded = 1;
+    snprintf(own, sizeof own, "%s/pac_names.txt", names_dir);
+    snprintf(up, sizeof up, "../%s/pac_names.txt", names_dir);
+    where[0] = getenv("PS2_MOD_NAMES");
+    where[1] = own;
+    where[2] = up;
+    where[3] = "pac_names.txt";
+    for (unsigned i = 0; i < sizeof where / sizeof where[0]; i++) {
+        if (!where[i] || !*where[i]) continue;
+        if (names_read(where[i], &cap) > 0) {
+            ps2_log("vfs: archive names from %s", where[i]);
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        ps2_log("vfs: no pac_names.txt, so files inside DATA.PAC can only be "
+                "named by position (BIN/DATA.PAC/<member>/#<index>).  "
+                "Generate it with: python -m modkit.export_names --disc DIR "
+                "--names datapack.bin -o %s", own);
+        return;
+    }
     qsort(pnames, npnames, sizeof *pnames, pname_cmp_pos);
     pnames_sorted = (u32 *)malloc((npnames ? npnames : 1u) * sizeof *pnames_sorted);
     if (!pnames_sorted) ps2_fatal("vfs: out of memory loading archive names");

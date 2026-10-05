@@ -10,6 +10,7 @@
 #   member 962 holds 1 files
 #   member 963 holds 3 files
 #   member 964 holds 22 files
+# members: 965
 0 0 sound/nus_config_ps2.txt
 0 1 sound/bank_common.p3d
 0 2 sound/bank_common.pbd

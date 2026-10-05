@@ -43,6 +43,7 @@ def main(argv=None):
                      "files they hold):\n")
             for i, c in slipped:
                 fp.write("#   member %d holds %d files\n" % (i, c))
+        fp.write("# members: %d\n" % ar.count)
         for line in lines:
             fp.write(line + "\n")
     ar.close()

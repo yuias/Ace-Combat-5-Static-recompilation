@@ -13,6 +13,10 @@ extern "C" {
 void ps2_vfs_claim(const char *path, const char *host, u64 size,
                    int priority, const char *owner);
 
+/* Directory that holds this region's pac_names.txt ("config" by default).
+   Call before the first lookup of a name inside DATA.PAC. */
+void ps2_vfs_set_config_dir(const char *dir);
+
 int  ps2_vfs_open(const char *disc_path);
 int  ps2_vfs_ready(void);
 

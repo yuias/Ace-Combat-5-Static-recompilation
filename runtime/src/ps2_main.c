@@ -639,6 +639,7 @@ int main(int argc, char **argv) {
         ps2_hook_selftest_attach();
     }
     if (load_image(dir) != 0) return 1;
+    ps2_vfs_set_config_dir(ps2_region_config);
     ps2_mod_init();
     if (disc) {
         if (ps2_vfs_open(disc) != 0)
