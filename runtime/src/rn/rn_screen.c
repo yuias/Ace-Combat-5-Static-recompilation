@@ -1,4 +1,5 @@
 #include "rn_int.h"
+#include "ps2_addr.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -10,19 +11,19 @@ int rn_screen_on;
 typedef struct { u32 lo, hi; const char *what; } screen_site;
 
 static const screen_site sites[] = {
-    { 0x0016171Cu, 0x0016171Du, "scene fade" },
-    { 0x001609A8u, 0x001609A9u, "impostor target clears" },
-    { 0x001D059Cu, 0x001D059Du, "cloud impostor puffs" },
-    { 0x001D03E0u, 0x001D03E1u, "cloud impostors (no intent)" },
-    { 0x001CD2CCu, 0x001CD2CDu, "cloud planes (no intent)" },
-    { 0x0012CD88u, 0x0012CD89u, "self-shadow passes" },
-    { 0x00113EC8u, 0x00114180u, "sky passes" },
-    { 0x00114580u, 0x0011467Cu, "sky passes (sub_114580)" },
-    { 0x0011AAF0u, 0x0011B82Cu, "sun occlusion chain" },
-    { 0x00118BC8u, 0x00119B74u, "sun flare" },
-    { 0x001B0680u, 0x001B09ECu, "sun glare" },
-    { 0x002F0628u, 0x002F0629u, "movie frame clear" },
-    { 0x00205E28u, 0x0026BDCCu, "effect system" },
+    { PS2_A(RN_RET_16171C), PS2_A(RN_RET_16171C) + 1u, "scene fade" },
+    { PS2_A(RN_RET_1609A8), PS2_A(RN_RET_1609A8) + 1u, "impostor target clears" },
+    { PS2_A(RN_RET_1D059C), PS2_A(RN_RET_1D059C) + 1u, "cloud impostor puffs" },
+    { PS2_A(RN_RET_1D03E0), PS2_A(RN_RET_1D03E0) + 1u, "cloud impostors (no intent)" },
+    { PS2_A(RN_RET_1CD2CC), PS2_A(RN_RET_1CD2CC) + 1u, "cloud planes (no intent)" },
+    { PS2_A(RN_RET_12CD88), PS2_A(RN_RET_12CD88) + 1u, "self-shadow passes" },
+    { PS2_A(RN_SKY_PASS), PS2_A(RN_SKY_PASS_END), "sky passes" },
+    { PS2_A(RN_SKY_PASS2), PS2_A(RN_SKY_PASS2_END), "sky passes (sub_114580)" },
+    { PS2_A(RN_SUN_CHAIN), PS2_A(RN_SUN_CHAIN_END), "sun occlusion chain" },
+    { PS2_A(RN_SUN_FLARE), PS2_A(RN_SUN_FLARE_END), "sun flare" },
+    { PS2_A(RN_SUN_GLARE), PS2_A(RN_SUN_GLARE_END), "sun glare" },
+    { PS2_A(RN_RET_2F0628), PS2_A(RN_RET_2F0628) + 1u, "movie frame clear" },
+    { PS2_A(RN_EFFECTS), PS2_A(RN_EFFECTS_END), "effect system" },
 };
 #define N_SITES (sizeof sites / sizeof sites[0])
 

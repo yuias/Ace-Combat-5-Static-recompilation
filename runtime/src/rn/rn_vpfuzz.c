@@ -1,4 +1,5 @@
 #include "rn_vp_int.h"
+#include "ps2_addr.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -341,12 +342,12 @@ static u32 flat_batch(void) {
 }
 
 static const fuzz_gen gens[] = {
-    { 0x003C3D80u, "ribbons", rib_init, 0, rib_batch, 4 },
-    { 0x003C06F0u, "particles", pt_init, 0, pt_batch, 4 },
-    { 0x003C2240u, "rain", rain_init, 0, rain_batch, 2 },
-    { 0x003A9350u, "flat", flat_init, 0, flat_batch, 6 },
-    { 0x003BE3E0u, "loadmap", load_init, 0, load_batch, 8 },
-    { 0x003C5220u, "trees", trees_init, 0, trees_batch, 8 },
+    { PS2_A(RN_VP_3C3D80), "ribbons", rib_init, 0, rib_batch, 4 },
+    { PS2_A(RN_VP_3C06F0), "particles", pt_init, 0, pt_batch, 4 },
+    { PS2_A(RN_VP_3C2240), "rain", rain_init, 0, rain_batch, 2 },
+    { PS2_A(RN_VP_3A9350), "flat", flat_init, 0, flat_batch, 6 },
+    { PS2_A(RN_VP_3BE3E0), "loadmap", load_init, 0, load_batch, 8 },
+    { PS2_A(RN_VP_3C5220), "trees", trees_init, 0, trees_batch, 8 },
 };
 
 int rn_vpfuzz_main(u32 start, u32 iterations, u32 seed) {

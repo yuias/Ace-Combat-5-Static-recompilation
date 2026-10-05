@@ -1,4 +1,5 @@
 #include "rn_vp_int.h"
+#include "ps2_addr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,25 +81,25 @@ typedef struct {
 } vp_prog;
 
 static vp_prog progs[] = {
-    { "model 39DB10",  0x0039DB10u, 0x0039FEA0u, rn_vp_model, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "part 3A0080",   0x003A0080u, 0x003A1100u, rn_vp_part, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "shadow 3A1110", 0x003A1110u, 0x003A1D30u, rn_vp_shadow, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "skinned 3A1D40", 0x003A1D40u, 0x003A40B0u, rn_vp_skin, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "aircraft 3A40C0", 0x003A40C0u, 0x003A6600u, rn_vp_aircraft, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "3A6610",        0x003A6610u, 0x003A91B0u, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "flat 3A9350",   0x003A9350u, 0x003AA3B0u, rn_vp_flat, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "3AA410",        0x003AA410u, 0x003ACE40u, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "3ACFE0",        0x003ACFE0u, 0x003AE100u, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "3AE110",        0x003AE110u, 0x003B0D50u, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "terrain 3B4080", 0x003B4080u, 0x003B7830u, rn_vp_terrain, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "detail 3BABD0", 0x003BABD0u, 0x003BC220u, rn_vp_detail, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "3BC600",        0x003BC600u, 0x003BD980u, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "loadmap 3BE3E0", 0x003BE3E0u, 0x003BEF00u, rn_vp_loadmap, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "lit 3BEF10",    0x003BEF10u, 0x003C0650u, rn_vp_lit, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "fx1 3C06F0",    0x003C06F0u, 0x003C2230u, rn_vp_fx1, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "rain 3C2240",   0x003C2240u, 0x003C3D70u, rn_vp_rain, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "fx2 3C3D80",    0x003C3D80u, 0x003C5210u, rn_vp_fx2, NULL, NULL, 0, 0, 0, 0, 0, 0 },
-    { "trees 3C5220",  0x003C5220u, 0x003C6ED0u, rn_vp_trees, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "model 39DB10",  PS2_A(RN_VP_39DB10), PS2_A(RN_VP_39DB10_END), rn_vp_model, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "part 3A0080",   PS2_A(RN_VP_3A0080), PS2_A(RN_VP_3A0080_END), rn_vp_part, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "shadow 3A1110", PS2_A(RN_VP_3A1110), PS2_A(RN_VP_3A1110_END), rn_vp_shadow, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "skinned 3A1D40", PS2_A(RN_VP_3A1D40), PS2_A(RN_VP_3A1D40_END), rn_vp_skin, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "aircraft 3A40C0", PS2_A(RN_VP_3A40C0), PS2_A(RN_VP_3A40C0_END), rn_vp_aircraft, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "3A6610",        PS2_A(RN_VP_3A6610), PS2_A(RN_VP_3A6610_END), NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "flat 3A9350",   PS2_A(RN_VP_3A9350), PS2_A(RN_VP_3A9350_END), rn_vp_flat, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "3AA410",        PS2_A(RN_VP_3AA410), PS2_A(RN_VP_3AA410_END), NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "3ACFE0",        PS2_A(RN_VP_3ACFE0), PS2_A(RN_VP_3ACFE0_END), NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "3AE110",        PS2_A(RN_VP_3AE110), PS2_A(RN_VP_3AE110_END), NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "terrain 3B4080", PS2_A(RN_VP_3B4080), PS2_A(RN_VP_3B4080_END), rn_vp_terrain, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "detail 3BABD0", PS2_A(RN_VP_3BABD0), PS2_A(RN_VP_3BABD0_END), rn_vp_detail, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "3BC600",        PS2_A(RN_VP_3BC600), PS2_A(RN_VP_3BC600_END), NULL, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "loadmap 3BE3E0", PS2_A(RN_VP_3BE3E0), PS2_A(RN_VP_3BE3E0_END), rn_vp_loadmap, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "lit 3BEF10",    PS2_A(RN_VP_3BEF10), PS2_A(RN_VP_3BEF10_END), rn_vp_lit, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "fx1 3C06F0",    PS2_A(RN_VP_3C06F0), PS2_A(RN_VP_3C06F0_END), rn_vp_fx1, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "rain 3C2240",   PS2_A(RN_VP_3C2240), PS2_A(RN_VP_3C2240_END), rn_vp_rain, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "fx2 3C3D80",    PS2_A(RN_VP_3C3D80), PS2_A(RN_VP_3C3D80_END), rn_vp_fx2, NULL, NULL, 0, 0, 0, 0, 0, 0 },
+    { "trees 3C5220",  PS2_A(RN_VP_3C5220), PS2_A(RN_VP_3C5220_END), rn_vp_trees, NULL, NULL, 0, 0, 0, 0, 0, 0 },
 };
 static u64 unrecognised_runs;
 #define N_PROGS (sizeof progs / sizeof progs[0])

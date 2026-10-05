@@ -1,4 +1,5 @@
 #include "rn_int.h"
+#include "ps2_addr.h"
 #include "ps2_settings.h"
 
 #include <math.h>
@@ -174,10 +175,10 @@ static int fe_on = -1;
 static struct { u64 prims, as2d, screen; } st_fe;
 
 static const struct { u32 lo, hi; } fe_ranges[] = {
-    { 0x002886D8u, 0x002EA730u },
-    { 0x0012BF1Cu, 0x0012BF1Du },
-    { 0x0012BFA8u, 0x0012BFA9u },
-    { 0x00161150u, 0x00161151u },
+    { PS2_A(RN_FE_CODE), PS2_A(RN_FE_CODE_END) },
+    { PS2_A(RN_RET_12BF1C), PS2_A(RN_RET_12BF1C) + 1u },
+    { PS2_A(RN_RET_12BFA8), PS2_A(RN_RET_12BFA8) + 1u },
+    { PS2_A(RN_RET_161150), PS2_A(RN_RET_161150) + 1u },
 };
 
 static int frontend_emitter(u32 e) {
