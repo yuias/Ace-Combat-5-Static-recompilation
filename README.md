@@ -21,6 +21,8 @@ There's no game code or assets in this repo. You bring your own copy of the game
   ```
 
   It has to be GCC 15 or newer. The generated code relies on guaranteed tail calls (`[[gnu::musttail]]`), and with an older compiler you get a CMake warning and an exe that can run out of stack.
+
+  If you'd rather not install MSYS2, there's a Clang build instead, see [Building with Clang](#building-with-clang-no-msys2) under step 4.
 - **CMake** 3.20 or newer, and **Ninja** (`pip install ninja` is the easiest way to get it).
 - **The [Vulkan SDK](https://vulkan.lunarg.com)**. The build uses its `glslc` to compile the shaders.
 - **Python 3.** Only the standard library is used, there's nothing to pip install. I'm on 3.12.
@@ -109,6 +111,16 @@ When it's done you'll have:
 - `build/gcc/ac5.exe`: the game
 - `build/gcc/shaders/`: the compiled shaders
 - `build/gcc/gsreplay.exe`: a dev tool that replays graphics captures, not needed to play
+
+### Building with Clang (no MSYS2)
+
+`tools/build-clang.ps1` builds with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Clang plus the mingw-w64 runtime) instead of MSYS2's GCC. On the first run it downloads llvm-mingw and the SDL3 mingw development package into `deps/`, which is git-ignored. You still need CMake, Ninja and the Vulkan SDK. From the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build-clang.ps1
+```
+
+The output goes to `build/clang` instead of `build/gcc`, and the script copies `SDL3.dll` and `libwinpthread-1.dll` next to `ac5.exe`, so it starts from anywhere. Extra arguments are passed on to the CMake configure step, for example `-DPS2_DIAG=ON`.
 
 ## Step 5: play
 

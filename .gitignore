@@ -36,3 +36,5 @@ tests/mods_resize/
 
 .claude/
 tmp/
+
+deps/
