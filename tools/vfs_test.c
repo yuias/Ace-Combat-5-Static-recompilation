@@ -121,6 +121,39 @@ static u32 crc32_of(const u8 *p, size_t n) {
     return ~c;
 }
 
+static u64 fnv1a64(const u8 *p, size_t n) {
+    u64 h = 0xCBF29CE484222325ull;
+    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 0x100000001B3ull;
+    return h;
+}
+
+// One line per file slot, for the name matcher (tools/modkit/match_names.py).
+// Two independent hashes plus the size make accidental collisions negligible.
+static int cmd_files(void) {
+    quiet = 1;
+    read_disc_tbl();
+    printf("count %u\n", disc_count);
+    for (u32 m = 0; m < disc_count; m++) {
+        u32 len, n;
+        u8 *d = disc_member(m, &len);
+        if (!d || len < 4 || len < 4u + 4u * (n = rd32(d))) {
+            printf("member %u -1 %u\n", m, disc_tbl[m].unpacked);
+            free(d);
+            continue;
+        }
+        printf("member %u %u %u\n", m, n, len);
+        for (u32 k = 0; k < n; k++) {
+            u32 flen;
+            const u8 *f = file_in(d, len, k, &flen);
+            if (!f) printf("file %u %u 0 -\n", m, k);
+            else printf("file %u %u %u %016llx%08x\n", m, k, flen,
+                        (unsigned long long)fnv1a64(f, flen), crc32_of(f, flen));
+        }
+        free(d);
+    }
+    return 0;
+}
+
 static int cmd_digest(int argc, char **argv) {
     static u8 buf[1 << 16];
     quiet = 1;
@@ -439,7 +472,7 @@ static int cmd_copies(const char *name) {
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        printf("usage: vfs_test identity|digest|copies|mods DISC [...]\n");
+        printf("usage: vfs_test identity|digest|copies|files|mods DISC [...]\n");
         return 2;
     }
     if (!strcmp(argv[1], "mods")) {
@@ -450,6 +483,7 @@ int main(int argc, char **argv) {
     if (ps2_vfs_open(argv[2]) != 0) { printf("cannot open %s\n", argv[2]); return 2; }
     quiet = 0;
     if (!strcmp(argv[1], "identity")) return cmd_identity();
+    if (!strcmp(argv[1], "files")) return cmd_files();
     if (!strcmp(argv[1], "digest")) return cmd_digest(argc, argv);
     if (!strcmp(argv[1], "copies") && argc > 3) return cmd_copies(argv[3]);
     if (!strcmp(argv[1], "cat") && argc > 4) {
