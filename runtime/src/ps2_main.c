@@ -239,6 +239,9 @@ void ps2_finish(const char *why) {
     }
     ps2_cap_report();
     ps2_state_dump_if_armed();
+    /* _exit skips atexit work, so join the render thread here to finalize the
+       PS2_AUDIO_WAV header. The summary above already read the audio counters. */
+    ps2_audio_stop();
     fflush(stdout);
     _exit(0);
 }

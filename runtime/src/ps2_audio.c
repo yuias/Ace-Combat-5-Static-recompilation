@@ -19,11 +19,17 @@ void ps2_spu2_init(void);
 #define AUDIO_CHANNELS  2
 #define AUDIO_CHUNK     512                 /* max frames per ps2_spu2_mix call */
 #define AUDIO_BUFFER_HNS 300000             /* 30 ms requested buffer */
+#define AUDIO_RETRY_MS  1000                /* device-outage retry period */
 #define AUDIO_WAIT_MS   200                 /* render wait timeout */
+
+/* mmdeviceapi.h does not declare IID_IUnknown; avoid linking uuid for it. */
+static const IID audio_IID_IUnknown =
+    {0x00000000, 0x0000, 0x0000, {0xC0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}};
 
 static HANDLE audio_thread, wake_event, buf_event, ready_event; /* auto-reset, except ready (manual) */
 static _Atomic int audio_live;      /* 1 only while a started stream is being serviced */
 static _Atomic int audio_quit;      /* set by ps2_audio_stop */
+static _Atomic int audio_reopen;    /* set by the notification client */
 static _Atomic u64 audio_bytes;     /* bytes handed to the device, excluding silent prefill */
 static _Atomic int audio_started;   /* render thread exists; written by start/stop only */
 
@@ -87,9 +93,9 @@ static void audio_close(void) {
 static HRESULT open_failed(const char *what, HRESULT hr) {
     if (!outage_logged) {
         if (hr == E_NOTFOUND)
-            ps2_log("audio: no output device, audio off");
+            ps2_log("audio: no output device, retrying");
         else
-            ps2_log("audio: %s 0x%08lX, audio off", what, (unsigned long)hr);
+            ps2_log("audio: %s 0x%08lX, retrying", what, (unsigned long)hr);
         outage_logged = 1;
     }
     audio_close();
@@ -100,6 +106,7 @@ static HRESULT audio_open(const wchar_t *endpoint_id) {
     WAVEFORMATEX wf = {0};
     BYTE *data;
     HRESULT hr;
+    int was_out;
 
     hr = endpoint_id
         ? IMMDeviceEnumerator_GetDevice(enumr, endpoint_id, &dev)
@@ -143,10 +150,15 @@ static HRESULT audio_open(const wchar_t *endpoint_id) {
     hr = IAudioClient_Start(client);
     if (FAILED(hr)) return open_failed("Start", hr);
 
+    /* Read the flag before clearing it: it decides which line to log. */
+    was_out = outage_logged;
     outage_logged = 0;
     atomic_store(&audio_live, 1);
-    ps2_log("audio: %u Hz %u-channel s16 WASAPI shared stream open (%u-frame buffer), SPU2 mixer attached",
-            AUDIO_RATE, AUDIO_CHANNELS, (unsigned)buffer_frames);
+    if (was_out)
+        ps2_log("audio: output device back, stream reopened");
+    else
+        ps2_log("audio: %u Hz %u-channel s16 WASAPI shared stream open (%u-frame buffer), SPU2 mixer attached",
+                AUDIO_RATE, AUDIO_CHANNELS, (unsigned)buffer_frames);
     return S_OK;
 }
 
@@ -177,10 +189,68 @@ static HRESULT audio_fill(void) {
     return hr;
 }
 
+/* Notification client: static, never freed. Callbacks arrive on an MMDevice
+   thread, so they only set a flag and wake the render thread. */
+static HRESULT STDMETHODCALLTYPE nc_QueryInterface(IMMNotificationClient *self,
+                                                   REFIID riid, void **out) {
+    if (IsEqualIID(riid, &audio_IID_IUnknown) ||
+        IsEqualIID(riid, &IID_IMMNotificationClient)) {
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE nc_AddRef(IMMNotificationClient *self) { (void)self; return 1; }
+static ULONG STDMETHODCALLTYPE nc_Release(IMMNotificationClient *self) { (void)self; return 1; }
+static HRESULT STDMETHODCALLTYPE nc_OnDeviceStateChanged(IMMNotificationClient *self,
+                                                         LPCWSTR id, DWORD state) {
+    (void)self; (void)id; (void)state;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE nc_OnDeviceAdded(IMMNotificationClient *self, LPCWSTR id) {
+    (void)self; (void)id;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE nc_OnDeviceRemoved(IMMNotificationClient *self, LPCWSTR id) {
+    (void)self; (void)id;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE nc_OnDefaultDeviceChanged(IMMNotificationClient *self,
+                                                           EDataFlow flow, ERole role,
+                                                           LPCWSTR id) {
+    (void)self; (void)id;
+    /* Windows sends one call per role; one of them is enough. A removed
+       current device surfaces as AUDCLNT_E_DEVICE_INVALIDATED instead. */
+    if (flow == eRender && role == eConsole) {
+        atomic_store(&audio_reopen, 1);
+        SetEvent(wake_event);
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE nc_OnPropertyValueChanged(IMMNotificationClient *self,
+                                                           LPCWSTR id, const PROPERTYKEY key) {
+    (void)self; (void)id; (void)key;
+    return S_OK;
+}
+
+static IMMNotificationClientVtbl notify_vtbl = {
+    .QueryInterface         = nc_QueryInterface,
+    .AddRef                 = nc_AddRef,
+    .Release                = nc_Release,
+    .OnDeviceStateChanged   = nc_OnDeviceStateChanged,
+    .OnDeviceAdded          = nc_OnDeviceAdded,
+    .OnDeviceRemoved        = nc_OnDeviceRemoved,
+    .OnDefaultDeviceChanged = nc_OnDefaultDeviceChanged,
+    .OnPropertyValueChanged = nc_OnPropertyValueChanged,
+};
+static IMMNotificationClient notify_client = { .lpVtbl = &notify_vtbl };
+
 static DWORD WINAPI audio_main(LPVOID arg) {
     DWORD task_index = 0;
     HANDLE mmcss;
     HRESULT hr;
+    int registered = 0;
     (void)arg;
 
     hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
@@ -199,6 +269,13 @@ static DWORD WINAPI audio_main(LPVOID arg) {
         goto out;
     }
 
+    hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(enumr, &notify_client);
+    if (FAILED(hr))
+        ps2_log("audio: RegisterEndpointNotificationCallback 0x%08lX, default device changes not followed",
+                (unsigned long)hr);
+    else
+        registered = 1;
+
     audio_open(NULL);
     SetEvent(ready_event);
 
@@ -206,8 +283,16 @@ static DWORD WINAPI audio_main(LPVOID arg) {
         HANDLE h[2] = { wake_event, buf_event };
         DWORD w;
         if (atomic_load(&audio_quit)) break;
-        if (!client) {                          /* no stream: only quit can wake us */
-            WaitForSingleObject(wake_event, INFINITE);
+        if (atomic_exchange(&audio_reopen, 0) && client) {
+            audio_close();
+            audio_open(NULL);                   /* failure -> outage state */
+            continue;
+        }
+        if (!client) {                          /* outage: poll for a device */
+            WaitForSingleObject(wake_event, AUDIO_RETRY_MS);
+            if (atomic_load(&audio_quit)) break;
+            atomic_store(&audio_reopen, 0);
+            audio_open(NULL);
             continue;
         }
         w = WaitForMultipleObjects(2, h, FALSE, AUDIO_WAIT_MS);
@@ -215,19 +300,22 @@ static DWORD WINAPI audio_main(LPVOID arg) {
             ps2_log("audio: wait failed (%lu)", (unsigned long)GetLastError());
             break;
         }
-        if (w == WAIT_OBJECT_0) continue;       /* quit request */
+        if (w == WAIT_OBJECT_0) continue;       /* quit or reopen request */
         /* Buffer event or timeout: a timeout fill is harmless and detects loss. */
         hr = audio_fill();
         if (FAILED(hr)) {
             if (hr != AUDCLNT_E_BUFFER_TOO_LARGE) {
-                ps2_log("audio: device lost (0x%08lX), audio off", (unsigned long)hr);
+                ps2_log("audio: device lost (0x%08lX), reopening", (unsigned long)hr);
                 audio_close();
+                audio_open(NULL);
             }
         }
     }
 
 out:
     audio_close();
+    if (registered)
+        IMMDeviceEnumerator_UnregisterEndpointNotificationCallback(enumr, &notify_client);
     if (enumr) { IMMDeviceEnumerator_Release(enumr); enumr = NULL; }
     if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
     CoUninitialize();
