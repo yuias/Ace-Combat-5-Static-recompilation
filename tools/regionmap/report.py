@@ -323,6 +323,55 @@ def _heuristic(lines: list, result) -> None:
                         _fmt_delta(r["ours"]), lo, hi, n, r["our_run"]))
 
 
+def _origins(row: dict) -> str:
+    return ", ".join(row["origins"])
+
+
+def _where(row: dict) -> str:
+    if row["function"] is None:
+        return "%s, no function" % (row["section"] or "?")
+    return "%s+%#x (%s)" % (row["function"], row["offset"], row["status"])
+
+
+def _anchors(lines: list, rows) -> None:
+    if rows is None:
+        return
+    unmapped = [r for r in rows if not r["mapped"]]
+    bad = [r for r in rows if r["prologue"] is not None and not r["prologue"]["same"]]
+    rest = [r for r in rows if r["mapped"] and not (r["prologue"] is not None
+                                                    and not r["prologue"]["same"])]
+    _heading(lines, "Required addresses (%d)" % len(rows))
+    lines.append("hooks, overrides and runtime constants that name a US address; "
+                 "origins are config keys or repo-relative path:line")
+    for kind in ("code", "data"):
+        sub = [r for r in rows if r["kind"] == kind]
+        lines.append("%s: %d of %d mapped" % (kind, sum(r["mapped"] for r in sub), len(sub)))
+    # Every row is listed in full: these are the addresses the project depends on.
+    lines.append("")
+    lines.append("-- unmapped (%d) --" % len(unmapped))
+    for r in unmapped:
+        lines.append("%08X %s %s: %s; origins: %s"
+                     % (r["addr"], r["kind"], _where(r), r["reason"], _origins(r)))
+    lines.append("")
+    lines.append("-- function prologue differs (%d) --" % len(bad))
+    if bad:
+        lines.append("first two raw words of the function entry, US vs JP")
+    for r in bad:
+        p = r["prologue"]
+        lines.append("%08X -> %08X %s: us %08X %08X, jp %08X %08X; origins: %s"
+                     % (r["addr"], r["jp"], _where(r), p["us"][0], p["us"][1],
+                        p["jp"][0], p["jp"][1], _origins(r)))
+    lines.append("")
+    lines.append("-- mapped (%d) --" % len(rest))
+    for r in rest:
+        extra = ""
+        if r["prologue"] is not None:
+            extra = " prologue-same"
+        lines.append("%08X -> %08X %s %s %s%s; origins: %s"
+                     % (r["addr"], r["jp"], r["kind"], _where(r), r["confidence"], extra,
+                        _origins(r)))
+
+
 def _jp_only(lines: list, rmap) -> None:
     text = next((s for s in rmap.sections if s["name"] == ".text"), None)
     gaps = []
@@ -354,13 +403,15 @@ def build_report(rmap, cm, extra: dict) -> str:
     _boundaries(lines, rmap)
     _evidence(lines, rmap)
     _heuristic(lines, extra.get("heuristic"))
+    _anchors(lines, extra.get("anchors"))
     _jp_only(lines, rmap)
     return "\n".join(lines) + "\n"
 
 
 def write_report(path: str, rmap, cm, extra: dict = None) -> None:
     """Write the text report. `extra` may carry elapsed seconds, the ELF
-    files (for uncertain-region previews) and the cross_check result."""
+    files (for uncertain-region previews), the cross_check result and the
+    anchors.check rows."""
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)

@@ -10,6 +10,9 @@ if __package__ in (None, ""):
 import paths
 from ps2recomp.elf import ElfFile
 
+from .anchors import check as check_anchors
+from .anchors import collect as collect_anchors
+from .anchors import summarize as summarize_anchors
 from .codematch import CodeMatcher, load_units
 from .common import file_info, image_bounds, pair_sections
 from .datamap import (check_evidence, collect_evidence, collect_weak_evidence, map_nobits,
@@ -154,6 +157,14 @@ def cmd_build(args, log=print):
         extra["heuristic"] = check
         log("heuristic: %d agree, %d disagree (%.1f%%)"
             % (check["agree"], check["disagree"], 100.0 * check["agree"] / max(total, 1)))
+    if not args.no_anchors:
+        rows = check_anchors(collect_anchors(args.config_dir, args.runtime, rmap.sections),
+                             rmap, us, jp)
+        a = stats["anchors"] = summarize_anchors(rows)
+        extra["anchors"] = rows
+        log("anchors: code %d/%d mapped, data %d/%d mapped, prologue mismatches %d"
+            % (a["code_mapped"], a["code_total"], a["data_mapped"], a["data_total"],
+               a["prologue_mismatches"]))
     path = os.path.join(args.out, "regionmap.json")
     rmap.save(path)
     log("wrote %s" % path)

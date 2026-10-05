@@ -11,7 +11,7 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 
-from ps2recomp.elf import ElfFile
+from ps2recomp.elf import ElfFile, PT_LOAD
 from regionmap import FuncMatch, Range, RegionMap, Uncertain
 from regionmap.codematch import CodeMatcher, Unit, _clear, load_units
 from regionmap.common import SecPair
@@ -22,6 +22,9 @@ from regionmap.common import image_bounds
 from regionmap.common import words as read_words
 from regionmap.normalize import (REF_ABS, REF_CALL, REF_GP, find_gp, hi_range_for,
                                  Stream, normalize_stream, scan_gp, text_stream)
+from regionmap.anchors import check as check_anchors
+from regionmap.anchors import collect as collect_anchors
+from regionmap.anchors import summarize as summarize_anchors
 from regionmap.report import cross_check, load_heuristic, write_report
 
 US = os.path.join(ROOT, "tmp", "us", "SLUS_208.51")
@@ -793,6 +796,111 @@ def test_report():
         shutil.rmtree(tmp)
 
 
+def test_anchors():
+    tmp = tempfile.mkdtemp()
+    try:
+        cfg = os.path.join(tmp, "config")
+        os.makedirs(cfg)
+        with open(os.path.join(cfg, "hooks.json"), "w") as fp:
+            json.dump({"0x00100000": "hook_a"}, fp)
+        with open(os.path.join(cfg, "report.json"), "w") as fp:
+            json.dump({"applied_overrides": {"0x00100020": "hle_b"},
+                       "applied_hooks": {"0x00100000": "hook_a"},
+                       "other": {"0x00100040": "x"}}, fp)
+        src = os.path.join(tmp, "runtime", "src", "rn")
+        inc = os.path.join(tmp, "runtime", "include")
+        os.makedirs(src)
+        os.makedirs(inc)
+        with open(os.path.join(src, "a.c"), "w") as fp:
+            fp.write("int x;\n"
+                     "u32 a = 0x00100040u, b = 0x00200010u;\n"
+                     "u32 w = 0x27BDFF90u, z = 0x00500000u, y = 0x00A0482Du;\n"
+                     "u32 c = 0x00100084u, d = 0x00200090u, e = 0x0010004C;\n")
+        with open(os.path.join(inc, "b.h"), "w") as fp:
+            fp.write("#define F 0x00100000u\n")
+        with open(os.path.join(inc, "skipped.txt"), "w") as fp:
+            fp.write("0x00100020\n")
+
+        secs = [{"name": ".text", "us_start": 0x100000, "us_end": 0x100100,
+                 "jp_start": 0x100010, "jp_end": 0x100110, "nobits": False},
+                {"name": ".data", "us_start": 0x200000, "us_end": 0x200100,
+                 "jp_start": 0x200020, "jp_end": 0x200120, "nobits": False}]
+        anchors = collect_anchors(cfg, os.path.join(tmp, "runtime"), secs)
+        got = {a.addr: a for a in anchors}
+        # 0x00500000 lies outside every section and the hex words are not addresses.
+        assert sorted(got) == [0x100000, 0x100020, 0x100040, 0x10004C, 0x100084, 0x200010,
+                               0x200090], [hex(a) for a in got]
+        assert got[0x100000].origins == ["config/hooks.json:hook_a",
+                                         "config/report.json:hook_a",
+                                         "runtime/include/b.h:1"], got[0x100000].origins
+        assert got[0x100020].origins == ["config/report.json:hle_b"]
+        assert got[0x100040].origins == ["runtime/src/rn/a.c:2"]
+        assert got[0x200010].kind == "data" and got[0x100000].kind == "code"
+
+        ranges = [Range(0x100000, 0x100040, 0x10, ".text", "func", "high"),
+                  Range(0x200000, 0x200080, 0x20, ".data", "content", "medium"),
+                  Range(0x2000C0, 0x200100, 0x20, ".data", "content", "medium")]
+        unc = [Uncertain(0x200080, 0x2000C0, ".data", [0x20, 0x24], "content differs")]
+        funcs = [make_func(0x100000, 0x100020, "sub_100000"),
+                 make_func(0x100020, 0x100040, "sub_100020"),
+                 make_func(0x100040, 0x100080, "sub_100040"),
+                 make_func(0x100080, 0x1000A0, "sub_100080")]
+        funcs[2].status, funcs[2].note = "body-changed", "calls differ"
+        funcs[3].status, funcs[3].jp, funcs[3].jp_end = "unmatched", None, None
+        funcs[3].note = "deleted"
+        m = RegionMap({"file": "US.elf", "sha256": "ab" * 32},
+                      {"file": "JP.elf", "sha256": "cd" * 32}, secs, ranges, unc, funcs, {})
+        m.validate()
+
+        class Seg:
+            type = PT_LOAD
+
+            def __init__(self, vaddr, words):
+                self.vaddr = vaddr
+                self.data = struct.pack("<%dI" % len(words), *words)
+                self.filesz = len(self.data)
+
+        class FakeElf:
+            def __init__(self, vaddr, words):
+                self.segments = [Seg(vaddr, words)]
+        us = FakeElf(0x100000, [1, 2, 0, 0, 0, 0, 0, 0, 3, 4])
+        jp = FakeElf(0x100010, [1, 2, 0, 0, 0, 0, 0, 0, 3, 5])
+        rows = {r["addr"]: r for r in check_anchors(anchors, m, us, jp)}
+        assert rows[0x100000]["jp"] == 0x100010 and rows[0x100000]["prologue"]["same"]
+        assert rows[0x100020]["prologue"]["same"] is False
+        assert rows[0x100020]["prologue"]["us"] == [3, 4] and rows[0x100020]["jp"] == 0x100030
+        # Inside a changed body with no range, and inside an unmatched function.
+        assert not rows[0x100040]["mapped"] and "calls differ" in rows[0x100040]["reason"]
+        assert rows[0x100040]["status"] == "body-changed"
+        assert not rows[0x100084]["mapped"] and "deleted" in rows[0x100084]["reason"]
+        assert rows[0x10004C]["function"] == "sub_100040" and rows[0x10004C]["offset"] == 0xC
+        assert rows[0x10004C]["prologue"] is None and rows[0x100040]["prologue"] is None
+        assert rows[0x200010]["mapped"] and rows[0x200010]["confidence"] == "medium"
+        assert rows[0x200010]["prologue"] is None
+        assert not rows[0x200090]["mapped"] and "content differs" in rows[0x200090]["reason"]
+        assert summarize_anchors(list(rows.values())) == {
+            "code_total": 5, "code_mapped": 2, "data_total": 2, "data_mapped": 1,
+            "prologue_checked": 2, "prologue_mismatches": 1}
+
+        path = os.path.join(tmp, "out", "regionmap.txt")
+        write_report(path, m, None, {"anchors": list(rows.values())})
+        with open(path, "rb") as fp:
+            raw = fp.read()
+        assert b"\r" not in raw
+        text = raw.decode()
+        assert "== Required addresses (7) ==" in text
+        assert "code: 2 of 5 mapped" in text and "data: 1 of 2 mapped" in text
+        assert text.index("-- unmapped (4) --") < text.index("-- function prologue differs (1) --") \
+            < text.index("-- mapped (2) --")
+        assert "00100040 code sub_100040+0x0 (body-changed): no range" in text
+        assert "origins: runtime/src/rn/a.c:2" in text
+        assert "00100020 -> 00100030 sub_100020+0x0 (same): us 00000003 00000004, " \
+            "jp 00000003 00000005; origins: config/report.json:hle_b" in text
+        assert tmp not in text
+    finally:
+        shutil.rmtree(tmp)
+
+
 def run_tool(*args):
     env = dict(os.environ, PYTHONPATH=TOOLS)
     r = subprocess.run([sys.executable, "-m", "regionmap", *args], env=env, cwd=ROOT,
@@ -962,6 +1070,25 @@ def test_real_binaries():
                      "== Uncertain regions", "== Heuristic cross-check"):
             assert head in report, head
         assert out not in report and ROOT not in report
+        ma = re.search(r"^anchors: code (\d+)/(\d+) mapped, data (\d+)/(\d+) mapped, "
+                       r"prologue mismatches (\d+)$", text, re.M)
+        assert ma, text
+        cm_, ct, dm, dt, pm = (int(ma.group(k)) for k in range(1, 6))
+        sa = m.stats["anchors"]
+        assert (sa["code_mapped"], sa["code_total"], sa["data_mapped"], sa["data_total"],
+                sa["prologue_mismatches"]) == (cm_, ct, dm, dt, pm)
+        assert ct >= 100 and dt >= 20 and cm_ <= ct and dm <= dt and pm <= sa["prologue_checked"]
+        assert "== Required addresses (%d) ==" % (ct + dt) in report
+        # Every key of the hook table is a required address.
+        with open(os.path.join(ROOT, "config", "hooks.json")) as fp:
+            hooks = json.load(fp)
+        for key, handler in hooks.items():
+            assert "config/hooks.json:%s" % handler in report, key
+        # Anything that does not map must be listed with its origins and a reason.
+        block = report[report.index("-- unmapped ("):report.index("-- function prologue differs")]
+        nun = (ct - cm_) + (dt - dm)
+        assert block.startswith("-- unmapped (%d) --" % nun), block
+        assert block.count("origins: ") == nun, block
         if extra_args:
             mh = re.search(r"^heuristic: (\d+) agree, (\d+) disagree \(([\d.]+)%\)$", text, re.M)
             assert mh and float(mh.group(3)) >= 95.0, text
@@ -986,6 +1113,7 @@ test_data_walk()
 test_nobits_map()
 test_evidence_filter()
 test_report()
+test_anchors()
 
 if os.path.isfile(US) and os.path.isfile(JP):
     test_real_normalize()
