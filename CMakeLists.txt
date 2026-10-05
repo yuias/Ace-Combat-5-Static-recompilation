@@ -34,8 +34,9 @@ list(APPEND GENERATED_SOURCES
 
 if(NOT GENERATED_SOURCES)
   message(FATAL_ERROR
-    "No generated sources. Run:\n"
-    "  python -m ps2recomp <elf> -o generated --ida-db config/ida_db.json")
+    "No generated sources in ${PS2_GENERATED_DIR}. Recompile the game "
+    "executable first, with the full command in README.md (step 3 for the "
+    "US release, or the Japanese release section).")
 endif()
 
 set(RUNTIME_SOURCES

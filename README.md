@@ -1,6 +1,6 @@
 # ps2recomp: Ace Combat 5
 
-A static recompilation of **Ace Combat 5: The Unsung War** (PS2, NTSC-U) for Windows.
+A static recompilation of **Ace Combat 5: The Unsung War** (PS2, NTSC-U) for Windows. The recompiler and the build also handle the Japanese release, but that one doesn't play yet, see [Japanese release](#japanese-release-slps-25418).
 
 The game's main CPU code isn't emulated. A Python tool reads the original executable and translates every function into C ahead of time. Clang then compiles that together with a runtime that stands in for the rest of the console: the GS (drawn through Vulkan), the VU vector units, SPU2 audio, the IPU for the movies, the IOP modules, memory cards and controllers. What you get at the end is a normal `ac5.exe`.
 
@@ -12,7 +12,7 @@ There's no game code or assets in this repo. You bring your own copy of the game
 
 ## What you need
 
-- **The game.** The US release, serial SLUS-20851, as an ISO or as the extracted disc files. Other regions won't work because the config files are tied to addresses in the US executable.
+- **The game.** The US release, serial SLUS-20851, as an ISO or as the extracted disc files. The config files in `config/` are tied to addresses in the US executable, so a disc from another region doesn't work with them. The Japanese release (SLPS-25418) has its own config set and its own section further down, but it isn't playable yet.
 - **64-bit Windows** and a GPU with a Vulkan driver. I build and play on Windows 10.
 - **Clang and SDL3** come from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and the SDL3 mingw development package. You don't install them yourself: the build script in step 4 downloads both into `deps/` (git-ignored) the first time it runs. The generated code relies on guaranteed tail calls (`musttail`), which Clang provides.
 - **CMake** 3.20 or newer, and **Ninja** (`pip install ninja` is the easiest way to get it).
@@ -62,7 +62,7 @@ This takes about 15 seconds, and the last line should be:
 emitted 10742 functions into 43 files in 15.0s
 ```
 
-(the time will be different for you). That gives you a `generated/` folder of about 50 MB:
+(the time will be different for you). If you already have a `generated/` folder from an older checkout, regenerate it, because `ps2_image.c` now records which region the image is from and the runtime checks that. That gives you a `generated/` folder of about 50 MB:
 
 - `ps2_code_0000.c` through `ps2_code_0042.c`: the recompiled functions
 - `ps2_func_table.c` and `ps2_funcs.h`: the address to function table the runtime dispatches through
@@ -194,12 +194,55 @@ The PS2's VU1 runs small vector programs that the game uploads to it while it's 
 
 Next time the game draws something with the VU1, the log should get a line like `vu1: 15 recompiled microprograms available` (15 is what a census through a full mission gave me, yours depends on how far you played). If you ever want to compare against the interpreter, set `PS2_VU_RECOMP=0`.
 
+## Japanese release (SLPS-25418)
+
+The Japanese release has its own config set in `config/slps-25418/`. The recompiler and the build work with it, but the game isn't playable yet: the runtime still uses the US addresses for its own hooks and patches, so a JP build doesn't run correctly. Treat this as a build target for now.
+
+The executable is `SLPS_254.18` in the root of the disc. The check is the same as in step 1:
+
+```powershell
+Get-FileHash .\SLPS_254.18 -Algorithm SHA256
+```
+
+```
+B510EE45343325BDACF14B81E3A1B34DE103C1F0379BEAA014795A4E401025AD
+```
+
+It should be exactly 3,634,988 bytes.
+
+`config/slps-25418/` is committed, so you don't need the US executable to use it. It was generated from the US config files, the US executable and the JP executable: `python -m regionmap build` compares the two executables and writes a map of which US address is which JP address, then `python -m regionconfig translate` uses that map to translate every table in `config/`. Anything that couldn't be carried over is listed with a reason in `config/slps-25418/manifest.json`. `python -m regionconfig check` tells you whether the committed set still matches the US configs. All of these need `PYTHONPATH` pointing at `tools`.
+
+To recompile (this is the US command from step 3 with the JP config files and output folder):
+
+```powershell
+$env:PYTHONPATH = "tools"
+python -m ps2recomp "C:\path\to\SLPS_254.18" -o generated/slps-25418 `
+    --ida-db config/slps-25418/ida_db.json `
+    --ida-seeds config/slps-25418/ida_seeds.json `
+    --symbols config/slps-25418/sdk_symbols.json `
+    --symbols config/slps-25418/manual_symbols.json `
+    --overrides config/slps-25418/overrides.json `
+    --hooks config/slps-25418/hooks.json
+```
+
+It reports `region: SLPS-25418 (jp)` and covers 98.02% of the code, against 98.04% for the US executable. To build it, use a separate build folder so the US build stays as it is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build-clang.ps1 -BuildDir build/clang-jp "-DPS2_GENERATED_DIR=generated/slps-25418"
+```
+
+That gives you `build/clang-jp/ac5.exe`.
+
+Each build knows which region it was made from. A JP build refuses a US disc and a US build refuses a JP disc: the log says `region: ...` and the game exits. Set `PS2_ALLOW_REGION_MISMATCH=1` to run anyway, which is only useful for debugging because the result will not work.
+
 ## Regenerating the config files
 
 You don't need to. Everything in `config/` is already generated and committed, so you don't need IDA or the PS2 SDK to build. If you want to redo them anyway:
 
 - `tools/ida/export_db.py` and `tools/ida/export_seeds.py` are IDA scripts that produce `ida_db.json` and `ida_seeds.json`.
 - `tools/identify_sdk.py` rebuilds `sdk_symbols.json` by matching the game against the SDK's EE libraries. Point `PS2SDK_DIR` at your SDK and `AC5_DISC` at the extracted disc folder first.
+
+The files in `config/slps-25418/` are made from these by the translation described in the previous section, not by running the IDA scripts again.
 
 ## What's in here
 
@@ -209,7 +252,8 @@ You don't need to. Everything in `config/` is already generated and committed, s
 - `runtime/`: everything that stands in for the console, plus the settings menu and the mod layer
 - `runtime/src/rn/`: the native renderer
 - `runtime/shaders/`: the GLSL shaders, compiled at build time
-- `config/`: the IDA export, symbol tables, overrides and hooks
+- `config/`: the IDA export, symbol tables, overrides and hooks (US); `config/slps-25418/` is the same set for the Japanese release
+- `tools/regionmap/`, `tools/regionconfig/`: map addresses between the two executables and translate the config set
 - `third_party/imgui/`: Dear ImGui, used for the settings menu
 - `third_party/lua/`: Lua 5.4.9, used for mod scripts
 - `tools/modkit/`: reads `DATA.PAC` by file name

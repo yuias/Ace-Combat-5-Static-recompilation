@@ -82,7 +82,9 @@ def require(path, what, hint):
 
 
 DISC_HINT = ("Set AC5_DISC to the extracted disc directory, or put it beside\n"
-             "the repo (or under game/) as '%s'." % REGION.disc_name)
+             "the repo (or under game/) as '%s'.\n"
+             "Set AC5_REGION (%s) to choose the region explicitly."
+             % (REGION.disc_name, "/".join(r.key for r in regions.REGIONS)))
 SDK_HINT = ("Set PS2SDK_DIR to a PS2SDK checkout.  Only the signature matcher\n"
             "needs it, and its output is already in config/sdk_symbols.json --\n"
             "you only need the SDK to regenerate that.")
