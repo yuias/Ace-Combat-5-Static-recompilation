@@ -180,7 +180,7 @@ class FakeElf:
         return self.mem.get(addr, 0)
 
 
-def gen_fixture(jp_words=None):
+def gen_fixture(jp_words=None, us_words=None):
     """US .text 100000-100400 maps with +10 / +20 (medium) / +30; .data +40."""
     ranges = [Range(0x100000, 0x100200, 0x10, ".text", "func", "high"),
               Range(0x100200, 0x100300, 0x20, ".text", "func", "medium"),
@@ -200,7 +200,8 @@ def gen_fixture(jp_words=None):
     jp_mem = {0x100010: 0x27BDFFF0, 0x100014: 0xFFBF0000, 0x100050: 0x03E00008,
               0x100220: 0x11111111, 0x100330: 0x22222222, 0x200040: 0xCAFE}
     jp_mem.update(jp_words or {})
-    us = FakeElf([(".text", 0x100000, 0x400), (".data", 0x200000, 0x100)], us_mem)
+    us_mem.update(us_words or {})
+    us =FakeElf([(".text", 0x100000, 0x400), (".data", 0x200000, 0x100)], us_mem)
     jp = FakeElf([(".text", 0x100000, 0x440), (".data", 0x200040, 0x100)], jp_mem)
     return Translator(rmap, us, jp)
 
@@ -325,8 +326,6 @@ def test_gen_words_and_selfchecks():
     assert has(gen_build("PS2_ADDR(Z, 0x00100004u, FUNC, 0)\n").errors, "function or chunk start")
     assert has(gen_build("PS2_ADDR(Z, 0x00200000u, CODE, 0)\n").errors, "not inside .text")
     assert has(gen_build("PS2_ADDR(Z, 0x00100000u, DATA, 0)\n").errors, "inside .text")
-    # a RET always needs a verdict for now
-    assert gen_build("PS2_ADDR(R, 0x00100008u, RET, 0)\n").pending == 1
     # a FUNC that is an ida_db function in US must be one in JP
     assert gen_build(ida=({0x100000}, {0x100010}), verdicts=BOTH).errors == []
     res = gen_build(ida=({0x100000}, {0x100050}), verdicts=BOTH)
@@ -338,6 +337,99 @@ def test_gen_words_and_selfchecks():
                                "PS2_ADDR(F_A_END, 0x00100008u, END, 0)\n"),
                     tr, {"addresses": {}, "config": {}, "values": {}}, None, True)
     assert has(res.needs, "F_A_END") and has(res.needs, "not above"), res.needs
+
+
+JAL_US = 0x0C040010  # jal 0x00100040 (sub_b); its JP entry is 0x00100050
+JAL_JP = 0x0C040014
+JALR = 0x0040F809  # jalr ra, v0
+RET_A = "PS2_ADDR(R_A, 0x00100010u, RET, 0)\n"  # same function, high range; JP 0x00100020
+RET_M = "PS2_ADDR(R_M, 0x00100210u, RET, 0)\n"  # body-changed function, medium range; map 0x00100230
+RET_M_VERDICT = {"0x00100210": {"name": "R_M", "verdict": "changed-verified",
+                                "jp": "0x00100230", "note": "n"}}
+
+
+def test_gen_ret():
+    # the call before the return address is proved from the JP side
+    res = gen_build(RET_A, us_words={0x100008: JAL_US}, jp_words={0x100018: JAL_JP})
+    assert res.errors == [] and res.pending == 0, (res.errors, res.needs)
+    assert jp_rows(res)["R_A"] == "PS2_ADDR_JP(R_A, 0x00100020u)  /* RET map */", res.jp_text
+    # a call to some other function does not prove it
+    res = gen_build(RET_A, us_words={0x100008: JAL_US}, jp_words={0x100018: JAL_US})
+    assert res.pending == 1 and has(res.needs, "RET not proved by its call"), res.needs
+    # the US word before the return address must be a call
+    res = gen_build(RET_A)
+    assert has(res.errors, "is not jal/jalr") and res.pending == 0, res.errors
+    res = gen_build("PS2_ADDR(R_B, 0x00200010u, RET, 0)\n", us_words={0x200008: JAL_US})
+    assert has(res.errors, "not inside .text"), res.errors
+
+    # body-changed function, medium range: the map value fails the check, but exactly one
+    # JP call to the translated target exists, so the pairing needs no verdict
+    us = {0x100208: JAL_US}
+    res = gen_build(RET_M, us_words=us, jp_words={0x100238: JAL_JP})
+    assert res.errors == [] and res.pending == 0, (res.errors, res.needs)
+    assert jp_rows(res)["R_M"] == "PS2_ADDR_JP(R_M, 0x00100240u)  /* RET jal pairing */", res.jp_text
+    assert res.by_map == 1, res.summary()
+    # the map value passes the check at JP-8: no pairing search
+    res = gen_build(RET_M, us_words=us, jp_words={0x100228: JAL_JP})
+    assert jp_rows(res)["R_M"] == "PS2_ADDR_JP(R_M, 0x00100230u)  /* RET map */", res.jp_text
+    # no call at all, and two calls: needs a verdict, which pins the map value
+    res = gen_build(RET_M, us_words=us)
+    assert res.pending == 1 and has(res.needs, "0 such call(s) in the JP function"), res.needs
+    two = {0x100238: JAL_JP, 0x100250: JAL_JP}
+    res = gen_build(RET_M, us_words=us, jp_words=two)
+    assert res.pending == 1 and has(res.needs, "2 such call(s) in the JP function"), res.needs
+    assert has(res.needs, "range confidence medium") and has(res.needs, "body-changed")
+    res = gen_build(RET_M, verdicts=RET_M_VERDICT, us_words=us, jp_words=two)
+    assert res.errors == [] and res.by_verdict == 1, (res.errors, res.needs)
+    assert "0x00100230u)  /* RET verdict changed-verified */" in res.jp_text, res.jp_text
+    # a twin call in the US function makes a single JP hit ambiguous
+    res = gen_build(RET_M, us_words={**us, 0x100220: JAL_US}, jp_words={0x100238: JAL_JP})
+    assert res.pending == 1 and has(res.needs, "2 in the US one"), res.needs
+
+    # a verdict for a RET that resolves by itself is unused, manual-jp included
+    for v in (dict(RET_M_VERDICT["0x00100210"]),
+              {"name": "R_M", "verdict": "manual-jp", "jp": "0x00100244", "note": "n"}):
+        res = gen_build(RET_M, verdicts={"0x00100210": v}, us_words=us,
+                        jp_words={0x100238: JAL_JP})
+        assert has(res.errors, "R_M (0x00100210, RET): verdict %s is not needed" % v["verdict"]), \
+            res.errors
+        assert "0x00100240u)  /* RET jal pairing */" in res.jp_text
+
+    # a jalr cannot be checked: needs a verdict whatever the map says
+    res = gen_build(RET_A, us_words={0x100008: JALR})
+    assert res.pending == 1 and has(res.needs, "jalr call"), (res.errors, res.needs)
+    v = {"0x00100010": {"name": "R_A", "verdict": "same-code", "jp": "0x00100020", "note": "n"}}
+    res = gen_build(RET_A, verdicts=v, us_words={0x100008: JALR})
+    assert res.errors == [] and res.by_verdict == 1, res.errors
+    # words after the return address are still compared
+    res = gen_build("PS2_ADDR(R_A, 0x00100010u, RET, 1)\n", us_words={0x100008: JAL_US},
+                    jp_words={0x100018: JAL_JP, 0x100020: 7})
+    assert has(res.needs, "words differ"), res.needs
+
+
+def test_show():
+    tr = gen_fixture(us_words={0x100008: JAL_US}, jp_words={0x100018: JAL_JP})
+    lines = gen.show_lines(tr, 0x100010, before=2, after=1)
+    assert lines[0].startswith("function: sub_a  US 00100000-00100040  JP 00100010-00100050  "
+                               "status same"), lines
+    assert lines[1].startswith("range: 00100000-00100200 delta +0x10") and "confidence high" in lines[1]
+    assert "anchor: US 00100010  JP 00100020" in lines, lines
+    rows = lines[-4:]
+    assert len(rows) == 4, rows
+    # the call row differs (relocated target) and shows both columns
+    assert rows[0].startswith("*  00100008  0C040010 JAL 00100040") and \
+        rows[0].endswith("| 00100018  0C040014 JAL 00100050"), rows[0]
+    assert rows[1].startswith("   0010000C") and "NOP" in rows[1], rows
+    assert rows[2].startswith(">  00100010") and "| 00100020" in rows[2], rows[2]
+    # an unmapped anchor shows the US side only; --jp pairs by hand
+    lines = gen.show_lines(tr, 0x1003F8, before=0, after=0)
+    assert lines[0] == "function: none in the map" and lines[-1].endswith("| -"), lines
+    lines = gen.show_lines(tr, 0x1003F8, 0, 0, jp=0x100018)
+    assert has(lines, "JP anchor given by hand") and lines[-1].endswith("| 00100018  0C040014 JAL "
+                                                                        "00100050"), lines
+    out = []
+    assert gen.run_show(tr, 0x100010, 1, 1, log=out.append) == 0 and len(out) == len(
+        gen.show_lines(tr, 0x100010, 1, 1))
 
 
 def test_gen_check():
@@ -418,6 +510,8 @@ test_real_tree()
 test_gen_resolution()
 test_gen_verdict_gate()
 test_gen_words_and_selfchecks()
+test_gen_ret()
+test_show()
 test_gen_check()
 test_gen_real()
 print("PASS: regionaddr")

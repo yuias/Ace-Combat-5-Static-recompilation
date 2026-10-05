@@ -41,6 +41,15 @@ def cmd_check(args) -> int:
     return gen.run_check(entries, tr, verdicts, ida, args.jp_out, args.words_out)
 
 
+def cmd_show(args) -> int:
+    tr = _load(args)
+    return gen.run_show(tr, args.us, args.before, args.after, args.jp)
+
+
+def _hex(text):
+    return int(text, 16)
+
+
 def _add_inputs(p):
     p.add_argument("--map", default=_path("tmp", "regionmap", "regionmap.json"))
     p.add_argument("--us-elf", default=_path("tmp", "us", regions.US.exe_name))
@@ -64,6 +73,13 @@ def main(argv=None):
     p = sub.add_parser("check", help="verify the generated tables are current")
     _add_inputs(p)
     p.set_defaults(func=cmd_check)
+    p = sub.add_parser("show", help="compare the US and JP instructions around an address")
+    p.add_argument("us", type=_hex, help="US address (hex)")
+    p.add_argument("--before", type=int, default=8, help="instructions before the address")
+    p.add_argument("--after", type=int, default=8, help="instructions after the address")
+    p.add_argument("--jp", type=_hex, help="JP address to pair with it instead of the map's")
+    _add_inputs(p)
+    p.set_defaults(func=cmd_show)
     args = ap.parse_args(argv)
     try:
         if args.cmd == "lint":
