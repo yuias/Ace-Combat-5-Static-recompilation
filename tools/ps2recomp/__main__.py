@@ -1,12 +1,57 @@
 import argparse
+import hashlib
 import json
 import os
 import sys
 import time
 
+import regions
 from .elf import ElfFile
 from .analysis import Program
 from .emit import Emitter
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fp:
+        for chunk in iter(lambda: fp.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def resolve_region(choice, digest):
+    """Return (region, known). Configs fit one exact executable, so an
+    unrecognised hash needs an explicit --region."""
+    found = regions.by_sha256(digest)
+    if choice == "auto":
+        if found is None:
+            raise SystemExit("unknown executable (sha256 %s); pass --region "
+                             "us|jp to recompile it anyway" % digest)
+        return found, True
+    want = regions.by_key(choice)
+    if found is not None and found is not want:
+        raise SystemExit("--region %s given, but the executable is %s (%s)"
+                         % (want.key, found.game_id, found.key))
+    return want, found is not None
+
+
+def ida_input_name(meta):
+    """Executable file name recorded in an ida_db meta block, or None.
+    The path may be Windows-style whatever host runs the tool."""
+    if not isinstance(meta, dict):
+        return None
+    src = meta.get("input")
+    if not isinstance(src, str) or not src:
+        return None
+    return src.replace("\\", "/").rsplit("/", 1)[-1] or None
+
+
+def check_ida_db_region(path, region):
+    with open(path) as fp:
+        name = ida_input_name(json.load(fp).get("meta"))
+    if name is not None and name.lower() != region.exe_name.lower():
+        raise SystemExit("%s was made for %s, this is %s; use %s/"
+                         % (path, name, region.exe_name, region.config_dir))
 
 
 def main(argv=None):
@@ -28,6 +73,9 @@ def main(argv=None):
     ap.add_argument("--hooks",
                     help="JSON {symbol-or-addr: native_handler}; the handler is "
                          "called on entry, before the recompiled body runs")
+    ap.add_argument("--region", choices=("auto", "us", "jp"), default="auto",
+                    help="region of the executable; auto identifies it by "
+                         "SHA-256")
     ap.add_argument("--report", help="write a JSON analysis report here")
     args = ap.parse_args(argv)
 
@@ -43,7 +91,7 @@ def main(argv=None):
         with open(args.ida_seeds) as fp:
             seeds = json.load(fp)
         extra = 0
-        for key in ("xref", "ptr"):
+        for key in ("xref", "ptr", "rederived"):
             for a in seeds.get(key, ()):
                 if prog.in_text(a) and a not in prog.entries:
                     prog.entries.add(a)
@@ -128,6 +176,14 @@ def main(argv=None):
                            "resolved_overrides": overrides, "resolved_hooks": hooks,
                            "symbol_provenance": provenance}, fp, indent=1)
         raise ValueError("unresolved override/hook targets: " + ", ".join(missing))
+
+    region, known = resolve_region(args.region, sha256_file(args.elf))
+    if args.ida_db:
+        check_ida_db_region(args.ida_db, region)
+    if not known:
+        print("region: unknown executable, treating it as %s" % region.game_id)
+    print("region: %s (%s)" % (region.game_id, region.key))
+
     os.makedirs(args.outdir, exist_ok=True)
     em = Emitter(prog, {"comments": args.comments,
                         "symbols": symbols,
@@ -143,6 +199,10 @@ def main(argv=None):
         fp.write('#include "ps2_runtime.h"\n')
         fp.write("const u32 ps2_image_base = 0x%08Xu;\n" % base)
         fp.write("const u32 ps2_image_size = 0x%08Xu;\n" % len(img))
+        fp.write("const u32 ps2_region = %du;\n" % region.runtime_id)
+        fp.write('const char ps2_game_id[] = "%s";\n' % region.game_id)
+        fp.write('const char ps2_region_exe[] = "%s";\n' % region.exe_name)
+        fp.write('const char ps2_region_config[] = "%s";\n' % region.config_dir)
 
     if em.unhandled:
         print("UNHANDLED OPCODES: %s" % sorted(em.unhandled.items(),

@@ -113,6 +113,41 @@ def test_paths_selection():
         shutil.rmtree(tmp)
 
 
+def test_resolve_region():
+    from ps2recomp.__main__ import resolve_region
+    us, jp = regions.US, regions.JP
+    assert resolve_region("auto", us.exe_sha256) == (us, True)
+    assert resolve_region("auto", jp.exe_sha256.upper()) == (jp, True)
+    assert resolve_region("jp", jp.exe_sha256) == (jp, True)
+    assert raises(SystemExit, resolve_region, "auto", "00" * 32)
+    assert raises(SystemExit, resolve_region, "us", jp.exe_sha256)
+    assert raises(SystemExit, resolve_region, "jp", us.exe_sha256)
+    assert resolve_region("jp", "00" * 32) == (jp, False)
+    assert resolve_region("us", "00" * 32) == (us, False)
+
+
+def test_ida_input_name():
+    from ps2recomp.__main__ import ida_input_name, check_ida_db_region
+    f = ida_input_name
+    assert f({"input": "C:\\games\\Disc (USA)\\SLUS_208.51"}) == "SLUS_208.51"
+    assert f({"input": "tmp/jp/SLPS_254.18"}) == "SLPS_254.18"
+    assert f({"input": "SLPS_254.18"}) == "SLPS_254.18"
+    assert f({}) is None and f(None) is None and f({"input": ""}) is None
+
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, "ida_db.json")
+        with open(path, "w", newline="\n") as fp:
+            fp.write('{"meta": {"input": "C:\\\\x\\\\SLUS_208.51"}}')
+        check_ida_db_region(path, regions.US)
+        assert raises(SystemExit, check_ida_db_region, path, regions.JP)
+        with open(path, "w", newline="\n") as fp:
+            fp.write("{}")
+        check_ida_db_region(path, regions.JP)
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_real_detect():
     assert regions.detect_elf(US_EXE) is regions.US
     assert regions.detect_elf(JP_EXE) is regions.JP
@@ -120,13 +155,48 @@ def test_real_detect():
         assert os.path.getsize(path) == r.exe_size
 
 
+def test_us_recompile():
+    import contextlib
+    import io
+    from ps2recomp.__main__ import main
+    out = tempfile.mkdtemp()
+    try:
+        cfg = lambda n: os.path.join(ROOT, "config", n)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            rc = main([US_EXE, "-o", out,
+                       "--ida-db", cfg("ida_db.json"),
+                       "--ida-seeds", cfg("ida_seeds.json"),
+                       "--symbols", cfg("sdk_symbols.json"),
+                       "--symbols", cfg("manual_symbols.json"),
+                       "--overrides", cfg("overrides.json"),
+                       "--hooks", cfg("hooks.json")])
+        assert rc == 0, buf.getvalue()
+        assert "region: SLUS-20851 (us)" in buf.getvalue()
+        with open(os.path.join(out, "ps2_image.c")) as fp:
+            img = fp.read()
+        for line in ("const u32 ps2_region = 0u;",
+                     'const char ps2_game_id[] = "SLUS-20851";',
+                     'const char ps2_region_exe[] = "SLUS_208.51";',
+                     'const char ps2_region_config[] = "config";'):
+            assert line in img, line
+        # Wrong region for this ELF is refused before any output is written.
+        assert raises(SystemExit, main, [US_EXE, "-o", out + "-x", "--region", "jp"])
+        assert not os.path.exists(out + "-x")
+    finally:
+        shutil.rmtree(out)
+
+
 test_system_cnf()
 test_lookup()
 test_config_file()
 test_paths_selection()
+test_resolve_region()
+test_ida_input_name()
 
 if os.path.isfile(US_EXE) and os.path.isfile(JP_EXE):
     test_real_detect()
+    test_us_recompile()
     print("PASS: regions (real binaries)")
 else:
     print("SKIP: real binaries not present")
