@@ -55,7 +55,9 @@ def test_config_file():
         r, "config", "slps-25418", "ida_db.json")
     assert cf(regions.JP, "ee_syscalls.json", r) == os.path.join(
         r, "config", "ee_syscalls.json")
-    assert cf(regions.JP, "pac_names.txt", r) == os.path.join(r, "config", "pac_names.txt")
+    assert cf(regions.JP, "pac_names.txt", r) == os.path.join(
+        r, "config", "slps-25418", "pac_names.txt")
+    assert cf(regions.US, "pac_names.txt", r) == os.path.join(r, "config", "pac_names.txt")
 
 
 def _load_paths(**env):

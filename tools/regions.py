@@ -33,7 +33,8 @@ JP = Region("jp", "SLPS-25418", "SLPS_254.18", 3634988,
 REGIONS = (US, JP)
 
 # No executable addresses in these; every region reads them from config/.
-NEUTRAL_CONFIGS = frozenset({"ee_syscalls.json", "pac_names.txt"})
+# pac_names.txt is per region: the DATA.PAC member layouts differ.
+NEUTRAL_CONFIGS = frozenset({"ee_syscalls.json"})
 
 _BOOT2 = re.compile(r"^\s*BOOT2\s*=\s*cdrom\d*:[\\/]*([^;\s]+)",
                     re.IGNORECASE | re.MULTILINE)
