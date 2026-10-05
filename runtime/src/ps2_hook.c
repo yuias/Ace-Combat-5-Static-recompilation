@@ -238,7 +238,10 @@ static int write_detour(hook_site *s) {
     long long to_thunk, to_stub;
 
     if (s->patched) return 0;
-    for (int i = 0; i < 8; i++) {
+    /* GCC pads with eight 1-byte nops, Clang with one 8-byte nopl. Either is
+       fine: the jmp overwrites the first 5 bytes and resumption is at +8. */
+    static const u8 sled_clang[8] = {0x0F, 0x1F, 0x84, 0x00, 0x00, 0x02, 0x00, 0x00};
+    if (memcmp(s->host, sled_clang, 8) != 0) for (int i = 0; i < 8; i++) {
         if (s->host[i] == 0x90) continue;
         ps2_log("hook: %08X does not begin with a patch sled -- this exe was "
                 "built with PS2_HOOK_ENTRIES=OFF, so hooks are refused",

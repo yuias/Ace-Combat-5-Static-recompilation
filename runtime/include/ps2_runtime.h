@@ -28,7 +28,11 @@ typedef int64_t  s64;
 #  define PS2_NO_MUSTTAIL 1
 #endif
 
-#if defined(__GNUC__)
+/* Clang has no noipa; noinline is what matters there, since a body inlined
+   into its caller would bypass the hook sled. */
+#if defined(__clang__)
+#  define PS2_NOIPA __attribute__((noinline))
+#elif defined(__GNUC__)
 #  define PS2_NOIPA __attribute__((noipa))
 #else
 #  define PS2_NOIPA
