@@ -1,12 +1,13 @@
 #include "rn_int.h"
+#include "ps2_addr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define SITE_CHAIN 0x0011AAF0u
-#define SITE_FLARE 0x00118BC8u
-#define SITE_GHOST 0x001B0680u
+#define SITE_CHAIN PS2_A(RN_SUN_CHAIN)
+#define SITE_FLARE PS2_A(RN_SUN_FLARE)
+#define SITE_GHOST PS2_A(RN_SUN_GLARE)
 
 enum { ROLE_UNKNOWN = 0xFF, ROLE_NONE = 0, ROLE_CHAIN, ROLE_FLARE, ROLE_GHOST };
 

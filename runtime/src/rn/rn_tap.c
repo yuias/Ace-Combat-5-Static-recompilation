@@ -2,6 +2,7 @@
 #include "ps2_hook.h"
 #include "ps2_gfxq.h"
 #include "ps2_capture.h"
+#include "ps2_addr.h"
 #include "rn_int.h"
 
 #include <stdio.h>
@@ -10,55 +11,47 @@
 
 int rn_taps_on;
 
-#define F_DB_OPEN    0x00320098u
-#define F_DB_CLOSE   0x003200D8u
-#define F_OT_INIT    0x00320390u
-#define F_OT_OPEN    0x00320538u
-#define F_OT_CLOSE   0x003205D0u
-#define F_OT_LINK    0x00320648u
-#define F_DC_FLUSH   0x003265E8u
-#define F_SCENE_DISPATCH 0x0031CF00u
-#define A_DRAWCTRL_PTR   0x004459A8u
-#define A_SCENE_ROOT_PTR 0x004459ACu
+#define F_DB_OPEN    PS2_A(RN_DB_OPEN)
+#define F_DB_CLOSE   PS2_A(RN_DB_CLOSE)
+#define F_OT_OPEN    PS2_A(RN_OT_OPEN)
+#define F_DC_FLUSH   PS2_A(RN_DC_FLUSH)
+#define F_SCENE_DISPATCH PS2_A(AC5_SCENE_DISPATCH)
+#define A_DRAWCTRL_PTR   PS2_A(AC5_DRAWCTRL_PTR)
+#define A_SCENE_ROOT_PTR PS2_A(AC5_SCENE_ROOT_PTR)
 
-typedef struct { u32 addr, size; u32 w[4]; } known_fn;
+/* The size comes from the list's _END entry, so a JP body of a different
+   length follows its region; the entry words are checked through
+   ps2_addr_code_matches(). */
+typedef struct { u32 addr, size; int aid; } known_fn;
+#define KNOWN_FN(n) { PS2_A(n), PS2_A(n##_END) - PS2_A(n), PS2_AID_##n }
 
-static const known_fn fn_db_open  = { F_DB_OPEN,  0x3C,
-    { 0x27BDFFF0u, 0xFFBF0000u, 0x80820015u, 0x10400006u } };
-static const known_fn fn_db_close = { F_DB_CLOSE, 0x94,
-    { 0x27BDFFE0u, 0xFFB00000u, 0x0080802Du, 0xFFB10008u } };
-static const known_fn fn_ot_init  = { F_OT_INIT,  0x94,
-    { 0x27BDFFF0u, 0xFFB00000u, 0x0080802Du, 0x00A0202Du } };
-static const known_fn fn_ot_open  = { F_OT_OPEN,  0x94,
-    { 0x27BDFFF0u, 0x2403FFFFu, 0xFFB00000u, 0xFFBF0008u } };
-static const known_fn fn_ot_close = { F_OT_CLOSE, 0x74,
-    { 0x27BDFFF0u, 0x0080382Du, 0xFFBF0000u, 0x00A0302Du } };
-static const known_fn fn_ot_link  = { F_OT_LINK,  0x4C,
-    { 0x27BDFFF0u, 0xFFB00000u, 0x0080802Du, 0xFFBF0008u } };
-static const known_fn fn_dc_flush = { F_DC_FLUSH, 0xF14,
-    { 0x27BDFEE0u, 0xFFB70108u, 0x0080B82Du, 0xFFB000D0u } };
+static const known_fn fn_db_open  = KNOWN_FN(RN_DB_OPEN);
+static const known_fn fn_db_close = KNOWN_FN(RN_DB_CLOSE);
+static const known_fn fn_ot_init  = KNOWN_FN(RN_OT_INIT);
+static const known_fn fn_ot_open  = KNOWN_FN(RN_OT_OPEN);
+static const known_fn fn_ot_close = KNOWN_FN(RN_OT_CLOSE);
+static const known_fn fn_ot_link  = KNOWN_FN(RN_OT_LINK);
+static const known_fn fn_dc_flush = KNOWN_FN(RN_DC_FLUSH);
 static const known_fn fn_2d[] = {
-    { 0x0032B3F0u, 0x1C0, { 0x27BDFDF0u, 0x3C014420u, 0x44812000u, 0xE7B40208u } },
-    { 0x0032B5B0u, 0x0A0, { 0x27BDFFC0u, 0xFFB00010u, 0x0080802Du, 0xFFB10018u } },
-    { 0x0032B650u, 0x0A0, { 0x27BDFFC0u, 0xFFB00010u, 0x0080802Du, 0xFFB10018u } },
-    { 0x0032B6F0u, 0x160, { 0x27BDFF50u, 0xFFB00090u, 0x00A0802Du, 0xFFB10098u } },
-    { 0x0032B850u, 0x0D4, { 0x27BDFE80u, 0xFFB00110u, 0x0080802Du, 0xFFB10118u } },
-    { 0x0032B928u, 0x090, { 0x27BDFFD0u, 0x00063400u, 0xFFB00000u, 0x00068403u } },
+    KNOWN_FN(RN_2D_32B3F0),
+    KNOWN_FN(RN_2D_32B5B0),
+    KNOWN_FN(RN_2D_32B650),
+    KNOWN_FN(RN_2D_32B6F0),
+    KNOWN_FN(RN_2D_32B850),
+    KNOWN_FN(RN_2D_32B928),
 };
 #define N_2D (sizeof fn_2d / sizeof fn_2d[0])
 
 typedef struct { known_fn fn; int arg; } writer_fn;
 static const writer_fn writers[] = {
-    { { 0x0011AAF0u, 0xD3C, { 0x27BDFF20u, 0x3C031000u, 0xFFBE00C0u, 0x00A0F02Du } }, 1 },
-    { { 0x00118BC8u, 0xFAC, { 0x27BDFB70u, 0xFFB70458u, 0x0080B82Du, 0x03A0202Du } }, 1 },
-    { { 0x001B0680u, 0x36C, { 0x27BDFE60u, 0xFFB20170u, 0x27B20040u, 0xFFB30178u } }, 1 },
+    { KNOWN_FN(RN_SUN_CHAIN), 1 },
+    { KNOWN_FN(RN_SUN_FLARE), 1 },
+    { KNOWN_FN(RN_SUN_GLARE), 1 },
 };
 #define N_WRITERS (sizeof writers / sizeof writers[0])
 
 static int code_matches(const known_fn *f) {
-    for (int i = 0; i < 4; i++)
-        if (ps2_r32(f->addr + 4u * (u32)i) != f->w[i]) return 0;
-    return 1;
+    return ps2_addr_code_matches(f->aid);
 }
 
 static inline int in_fn(const known_fn *f, u32 a) {
@@ -390,7 +383,7 @@ void rn_init(void) {
         for (size_t i = 0; i < sizeof all / sizeof all[0]; i++)
             if (!code_matches(all[i])) {
                 ps2_log("rn: %08X is not the function the taps expect; this is "
-                        "not SLUS_208.51 -- no render taps", all[i]->addr);
+                        "not %s -- no render taps", all[i]->addr, ps2_region_exe);
                 bad = 1;
             }
         for (size_t i = 0; i < N_2D; i++)

@@ -1,12 +1,12 @@
 #include "ps2_hook.h"
+#include "ps2_addr.h"
 #include "rn_int.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define F_SUN_FLARE 0x00118BC8u
-static const u32 sun_flare_w[2] = { 0x27BDFB70u, 0xFFB70458u };
+#define F_SUN_FLARE PS2_A(RN_SUN_FLARE)
 
 static struct { u32 obj, pkt, gp; float arg; } fl_in;
 static struct { u64 fans, rewritten, compared, matched, differed, skipped, unproven; } st_fl;
@@ -181,7 +181,7 @@ static int tap_flare(ps2_ctx *ctx, void *u) {
 void rn_fixes_init(void) {
     const char *e = getenv("PS2_FIX_FLARE");
     if (e && *e == '0') return;
-    if (ps2_r32(F_SUN_FLARE) != sun_flare_w[0] || ps2_r32(F_SUN_FLARE + 4u) != sun_flare_w[1]) {
+    if (!ps2_addr_code_matches(PS2_AID_RN_SUN_FLARE)) {
         ps2_log("rn-fix: the sun flare %08X does not match; not fixed", F_SUN_FLARE);
         return;
     }
