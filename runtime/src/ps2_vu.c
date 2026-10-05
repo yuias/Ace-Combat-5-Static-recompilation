@@ -421,12 +421,6 @@ PS2_INLINE u32 vu_mac4(vu_f4 v, u32 dest) {
     return (z & dest) | ((s & dest) << 4);
 }
 
-PS2_INLINE float vu_lane(vu_f4 v, int i) {
-    ps2_vf t;
-    _mm_store_ps(t.f, v);
-    return t.f[i];
-}
-
 #else
 
 PS2_INLINE vu_f4 vu_ld(const ps2_vf *v) {
@@ -487,7 +481,6 @@ PS2_INLINE u32 vu_mac4(vu_f4 v, u32 dest) {
     }
     return mac;
 }
-PS2_INLINE float vu_lane(vu_f4 v, int i) { return v.f[i]; }
 PS2_INLINE vu_f4 vu_perm_yzx(vu_f4 v) {
     vu_f4 r; r.f[0] = v.f[1]; r.f[1] = v.f[2]; r.f[2] = v.f[0]; r.f[3] = v.f[3];
     return r;

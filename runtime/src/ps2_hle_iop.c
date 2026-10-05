@@ -540,7 +540,7 @@ void ps2_dump_archive(const char *when) {
                         ps2_r32(p + 4), fmt, w, h);
                 total = w * h;
                 if (fmt == 0x14 || fmt == 0x24 || fmt == 0x2C) total = (total + 1) / 2;
-                else if (fmt == 0x13 || fmt == 0x1B) total = total;
+                else if (fmt == 0x13 || fmt == 0x1B) {}
                 else if (fmt == 0) total *= 4; else if (fmt == 1) total *= 3;
                 else total *= 2;
                 if (total > 0x100000u) total = 0x100000u;
