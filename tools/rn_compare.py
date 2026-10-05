@@ -10,9 +10,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def replay(capture, fields, shot, env_extra):
-    exe = os.path.join(ROOT, "build", "gcc", "gsreplay.exe")
+    exe = os.path.join(ROOT, "build", "clang", "gsreplay.exe")
     env = dict(os.environ)
-    env["PS2_SHADER_DIR"] = os.path.join(ROOT, "build", "gcc", "shaders")
+    env["PS2_SHADER_DIR"] = os.path.join(ROOT, "build", "clang", "shaders")
     env["PS2_PRESENT_MODE"] = "immediate"
     env.update(env_extra)
     log = shot.replace(".ppm", ".log")

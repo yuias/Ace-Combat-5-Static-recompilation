@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths
+import toolchain
 
 root = Path(paths.ROOT)
 out = root / 'out' / 'vfs_test'
@@ -16,7 +17,7 @@ mods = root / 'tests' / 'mods'
 
 def build():
     out.mkdir(parents=True, exist_ok=True)
-    subprocess.run(['gcc', '-std=gnu2x', '-O2', '-fno-strict-aliasing', '-fwrapv',
+    subprocess.run([toolchain.cc(), '-std=gnu2x', '-O2', '-fno-strict-aliasing', '-fwrapv',
                     '-Wall', '-Wextra', '-Wno-unused-parameter',
                     '-I' + str(root / 'runtime/include'),
                     str(root / 'tools/vfs_test.c'),

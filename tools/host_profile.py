@@ -1,13 +1,14 @@
 import argparse
 import bisect
 import os
-import shutil
 import subprocess
 import sys
 
+import toolchain
+
 
 def symbols(exe):
-    nm = shutil.which("nm") or r"C:\msys64\ucrt64\bin\nm.exe"
+    nm = toolchain.tool("llvm-nm")
     out = subprocess.run([nm, "-n", "-C", exe], capture_output=True, text=True).stdout
     addrs, names, base = [], [], None
     for line in out.splitlines():

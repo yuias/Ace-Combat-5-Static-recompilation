@@ -4,6 +4,7 @@ import subprocess
 from types import SimpleNamespace
 from ps2recomp.r5900 import decode
 from ps2recomp.emit import Emitter
+import toolchain
 
 root = Path(__file__).resolve().parents[1]
 out = root / 'out' / 'runtime_regressions'
@@ -120,7 +121,7 @@ int main(void) {
 }
 '''
 (out/'collision_probe.c').write_text(harness)
-cmd = ['gcc','-std=gnu2x','-O1','-ffunction-sections','-fdata-sections',
+cmd = [toolchain.cc(),'-std=gnu2x','-O1','-ffunction-sections','-fdata-sections',
        '-fno-strict-aliasing','-fwrapv',
        '-I'+str(root/'runtime/include'),str(out/'collision_probe.c'),
        str(root/'runtime/src/ps2_core.c'),'-Wl,--gc-sections','-lm',

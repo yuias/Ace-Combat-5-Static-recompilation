@@ -549,7 +549,7 @@ static void barrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspect,
 }
 
 static const char *shader_dir(char *buf, size_t cap) {
-    static const char *cand[] = { "shaders", "build/gcc/shaders",
+    static const char *cand[] = { "shaders", "build/clang/shaders",
                                   "build/shaders", "runtime/shaders" };
     char probe[1024];
     const char *bp;
