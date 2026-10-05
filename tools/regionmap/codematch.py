@@ -4,12 +4,13 @@ from dataclasses import dataclass, field
 from typing import Iterator, List, Optional, Tuple
 
 from .mapfile import FuncMatch, Range, merge_ranges
-from .normalize import Stream
+from .normalize import REF_ABS, REF_CALL, Stream
 
 MIN_EXACT_WORDS = 4      # shorter units are placed by references or gap diff only
 SEARCH_WINDOW = 0x1000   # +- bytes around the expected JP address in the exact pass
 AMBIGUOUS_MIN_WORDS = 8  # shorter units are too generic to pick among several hits
 MIN_DIFF_BLOCK = 2       # equal blocks shorter than this are not worth a range
+MAX_ROUNDS = 4           # passes that feed each other stop here if still changing
 
 
 @dataclass
@@ -67,7 +68,10 @@ class CodeMatcher:
             else:
                 self._dups.append((r, u))
         self.stats = {"units": len(units), "exact": 0, "exact_ambiguous": 0,
-                      "order_demoted": 0}
+                      "order_demoted": 0, "call_pairs_checked": 0, "call_conflicts": 0,
+                      "located": 0, "placed_by_call": 0, "gap_filled": 0}
+        # (site, US target, JP start of the matched target, JP target at the site)
+        self.conflicts: List[Tuple[int, int, int, int]] = []
         self._ranges: Optional[List[Range]] = None
         self._range_starts: List[int] = []
 
@@ -147,8 +151,142 @@ class CodeMatcher:
         self.stats["exact"] = sum(1 for u in self.reps if u.status == "same")
         return self.stats["exact"]
 
+    def _ref_pairs(self) -> Iterator[Tuple[int, int, int, int]]:
+        """(site US word index, kind, US target, JP target) where an aligned US
+        word and its JP counterpart carry the same kind of code reference."""
+        us, jp = self.us, self.jp
+        ulo, uhi = us.base, us.addr(len(us.raw))
+        jlo, jhi = jp.base, jp.addr(len(jp.raw))
+        for i, j in self.aligned_pairs():
+            a = us.refs.get(i)
+            if a is None:
+                continue
+            b = jp.refs.get(j)
+            if b is None or b[0] != a[0] or a[0] not in (REF_CALL, REF_ABS):
+                continue
+            # Absolute references only count when both targets are code; this
+            # also drops constants outside the image that merely look like addresses.
+            if not (ulo <= a[1] < uhi and jlo <= b[1] < jhi):
+                continue
+            yield i, a[0], a[1], b[1]
+
+    def _place(self, u: Unit, target: int) -> None:
+        """Put a unit at a JP address learned from a reference."""
+        n = (u.us_end - u.us) >> 2
+        i, j = self.us.index(u.us), self.jp.index(target)
+        u.jp, u.method, u.note = target, "call", ""
+        if j + n <= len(self.jp.norm) and self.jp.norm[j:j + n] == self.us.norm[i:i + n]:
+            u.jp_end = target + (u.us_end - u.us)
+            u.status, u.confidence, u.similarity = "same", 0.9, 1.0
+            self.stats["placed_by_call"] += 1
+        else:
+            u.jp_end, u.status = None, "located"
+            self.stats["located"] += 1
+
+    def _propagate_once(self) -> int:
+        reps = self.reps
+        starts = {}
+        for u in reps:
+            if u.us not in starts or u.main:
+                starts[u.us] = u
+        cands = {}
+        pairs = conflicts = 0
+        self.conflicts = []
+        for i, _, ut, jt in self._ref_pairs():
+            v = starts.get(ut)
+            if v is None:
+                continue
+            pairs += 1
+            if v.jp is not None:
+                if v.jp != jt:
+                    conflicts += 1
+                    self.conflicts.append((self.us.addr(i), ut, v.jp, jt))
+            else:
+                cands.setdefault(v.us, set()).add(jt)
+        self.stats["call_pairs_checked"], self.stats["call_conflicts"] = pairs, conflicts
+        if not cands:
+            return 0
+
+        # Link order: a unit lies after the end of the nearest matched unit
+        # before it and before the start of the nearest one after it.
+        lows, highs = [], [0] * len(reps)
+        lo = self.jp.base
+        for u in reps:
+            lows.append(lo)
+            if u.jp is not None:
+                lo = u.jp_end if u.jp_end is not None else u.jp + 4
+        hi = self.jp.addr(len(self.jp.raw))
+        for k in range(len(reps) - 1, -1, -1):
+            highs[k] = hi
+            if reps[k].jp is not None:
+                hi = reps[k].jp
+
+        placed = 0
+        last_end = 0                    # end of the unit placed last in this round
+        for k, u in enumerate(reps):
+            c = cands.get(u.us)
+            if c is None or u.jp is not None or starts[u.us] is not u:
+                continue
+            if len(c) > 1:
+                u.note = "call targets disagree"
+                continue
+            t = next(iter(c))
+            if not (max(lows[k], last_end) <= t < highs[k]):
+                u.note = "call target out of order"
+                continue
+            self._place(u, t)
+            last_end = u.jp_end if u.jp_end is not None else u.jp + 4
+            placed += 1
+        return placed
+
+    def _fill_equal_gaps(self) -> int:
+        """Units between two matched units that keep the same shift, where the
+        raw words of the whole gap agree, are present at that shift too. This
+        places short stubs that no reference reaches."""
+        filled = 0
+        prev, pending = None, []
+        for u in self.reps:
+            if u.jp_end is None:
+                if u.jp is None:
+                    pending.append(u)
+                else:                       # located: its span is not known yet
+                    prev, pending = None, []
+                continue
+            d = u.jp - u.us
+            if prev is not None and pending and prev.us_end <= u.us \
+                    and prev.jp_end - prev.us_end == d \
+                    and self._raw_equal(prev.us_end, u.us, d):
+                for p in pending:
+                    if p.us >= prev.us_end and p.us_end <= u.us:
+                        p.jp, p.jp_end = p.us + d, p.us_end + d
+                        p.status, p.method, p.note = "same", "exact", "inside equal-shift gap"
+                        p.confidence, p.similarity = 0.9, 1.0
+                        filled += 1
+            prev, pending = u, []
+        self.stats["gap_filled"] += filled
+        return filled
+
+    def propagate_refs(self) -> int:
+        """Place units through the references of already-aligned code, then
+        through equal-shift gaps, until nothing changes. Returns the number of
+        units placed."""
+        total = 0
+        while True:
+            n = self._propagate_once()
+            n += self._fill_equal_gaps()
+            if not n:
+                break
+            total += n
+        self.sync_duplicates()
+        self._ranges = None
+        return total
+
     def run(self) -> None:
         self.match_exact()
+        # Call and gap passes feed each other, so they repeat until stable.
+        for _ in range(MAX_ROUNDS):
+            if not self.propagate_refs():
+                break
         for u in self.reps:
             if u.status == "located":
                 _clear(u, "located but not resolved")
@@ -172,17 +310,19 @@ class CodeMatcher:
         if self._ranges is not None:
             return self._ranges
         out: List[Range] = []
-        prev = None
+        prev = None                       # (us_end, jp_end) of the last placed unit
         for u in self.reps:
+            if u.jp_end is None:
+                continue
+            d = u.jp - u.us
+            # Padding and code IDA did not type between two placed units that
+            # meet at the same shift is covered when its raw words agree.
+            if prev is not None and prev[0] < u.us and prev[1] - prev[0] == d \
+                    and self._raw_equal(prev[0], u.us, d):
+                out.append(Range(prev[0], u.us, d, ".text", "func", "high"))
+            prev = (u.us_end, u.jp_end)
             if u.status == "same":
-                d = u.jp - u.us
                 out.append(Range(u.us, u.us_end, d, ".text", "func", "high"))
-                # Padding and code IDA did not type between two units with the
-                # same shift is covered when its raw words agree.
-                if prev is not None and prev.jp - prev.us == d and prev.us_end < u.us \
-                        and self._raw_equal(prev.us_end, u.us, d):
-                    out.append(Range(prev.us_end, u.us, d, ".text", "func", "high"))
-                prev = u
             elif u.status == "body-changed":
                 for a, b, n in u.blocks:
                     if n >= MIN_DIFF_BLOCK:
@@ -217,7 +357,7 @@ class CodeMatcher:
             main = next((u for u in units if u.main), None)
             if main is None:
                 continue
-            status, note = main.status, main.note
+            status, note, conf = main.status, main.note, main.confidence
             chunks = []
             if len(units) > 1:
                 chunks = [[u.us, u.us_end, u.jp, u.status] for u in units]
@@ -225,8 +365,9 @@ class CodeMatcher:
                 if status == "same" and bad:
                     status = "body-changed"
                     note = "chunk %08X is %s" % (bad[0].us, bad[0].status)
+                    conf = min(u.confidence for u in units)
             out.append(FuncMatch(main.us, main.us_end, main.name, main.jp, main.jp_end,
-                                 status, main.method, main.confidence, main.similarity,
+                                 status, main.method, conf, main.similarity,
                                  note, chunks))
         out.sort(key=lambda f: f.us)
         return out

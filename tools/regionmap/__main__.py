@@ -86,6 +86,12 @@ def cmd_build(args, log=print):
     log("code: %d functions (%d units): same %d, body-changed %d, unmatched %d; %.1f s"
         % (len(funcs), len(units), counts.get("same", 0), counts.get("body-changed", 0),
            counts.get("unmatched", 0), time.time() - t1))
+    cs = cm.stats
+    log("calls: %d pairs checked, %d conflicts (%.2f%%); placed by call %d, "
+        "located %d, gap-filled %d"
+        % (cs["call_pairs_checked"], cs["call_conflicts"],
+           100.0 * cs["call_conflicts"] / max(cs["call_pairs_checked"], 1),
+           cs["placed_by_call"], cs["located"], cs["gap_filled"]))
 
     # Code ranges replace the section-level placeholder for .text.
     ranges = [r for r in ranges if r.section != ".text"] + cm.code_ranges()

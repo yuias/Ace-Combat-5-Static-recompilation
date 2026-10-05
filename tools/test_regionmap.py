@@ -348,6 +348,96 @@ def test_exact_pass_synthetic():
     assert [(r.us_start, r.us_end) for r in cm.code_ranges()][0] == (0x1000, 0x1018)
 
 
+def ref_streams(jp_s_target=0x2038, jp_extra=None):
+    """US A B S C G D; JP inserts two words before B. S is a 2-word stub whose
+    raw words differ (a masked call target) so only A's call reaches it; G is a
+    stub with identical raw words."""
+    seq = lambda hi, n: [hi + k for k in range(n)]
+    jal_s, jal_b = 0x0C000000 | (0x1030 >> 2), 0x0C000000 | (0x1018 >> 2)
+    a = [0x110, 0x0C000000, 0x0C000000] + seq(0x113, 3)
+    b, c, d = seq(0x120, 6), seq(0x130, 6), seq(0x140, 6)
+    s_norm, g = [0x200, 0x201], [0x210, 0x211]
+    us_raw = a[:1] + [jal_s, jal_b] + a[3:] + b + s_norm + c + g + d
+    us_norm = a + b + s_norm + c + g + d
+    us = Stream(0x1000, us_raw, us_norm, {1: (REF_CALL, 0x1030), 2: (REF_CALL, 0x1018)}, {})
+    jp_norm = a + [0, 0] + b + s_norm + c + g + d
+    jp_raw = list(jp_norm)
+    jp_raw[1] = 0x0C000001           # raw words of masked calls differ
+    jp_raw[14] = 0x300               # S: raw differs, normalized equal
+    jp_refs = {1: (REF_CALL, jp_s_target), 2: (REF_CALL, 0x2060)}
+    jp_refs.update(jp_extra or {})
+    return us, Stream(0x2000, jp_raw, jp_norm, jp_refs, {})
+
+
+def test_reference_propagation():
+    w = lambda i: 0x1000 + 4 * i
+    def units():
+        return [Unit(w(0), w(6), w(0), "fa", True), Unit(w(6), w(12), w(6), "fb", True),
+                Unit(w(12), w(14), w(12), "stub", True), Unit(w(14), w(20), w(14), "fc", True),
+                Unit(w(20), w(22), w(20), "gap", True), Unit(w(22), w(28), w(22), "fd", True)]
+
+    us, jp = ref_streams()
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.run()
+    ua, ub, s, uc, g, ud = cm.units
+    assert ub.jp == 0x2020 and uc.jp == 0x2040 and ud.jp == 0x2060, (ub.jp, uc.jp, ud.jp)
+    # A 2-word stub is placed only through the JAL of a matched caller.
+    assert (s.status, s.method, s.jp, s.jp_end, s.confidence) == \
+        ("same", "call", 0x2038, 0x2040, 0.9), s
+    # Raw-equal gap between two units at the same shift: the stub in it is placed.
+    assert (g.status, g.method, g.jp) == ("same", "exact", 0x2058), g
+    # The call to fb disagrees with fb's own placement.
+    assert cm.stats["call_conflicts"] == 1 and cm.stats["call_pairs_checked"] == 2, cm.stats
+    assert cm.conflicts == [(0x1008, 0x1018, 0x2020, 0x2060)], cm.conflicts
+    assert cm.stats["placed_by_call"] == 1 and cm.stats["gap_filled"] == 1
+    assert cm.code_translate(w(12)) == 0x2038 and cm.code_translate(w(20)) == 0x2058
+    # A cached range table is dropped when propagation changes units.
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.match_exact()
+    before = cm.code_ranges()
+    assert cm._ranges is before
+    cm.propagate_refs()
+    assert cm._ranges is None and cm.code_ranges() is not before
+
+    # A target before the previous matched unit's end breaks link order.
+    us, jp = ref_streams(jp_s_target=0x2010)
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.run()
+    assert cm.units[2].status == "unmatched" and cm.units[2].note == "call target out of order"
+
+    # Two call sites naming different targets leave the stub unmatched.
+    us, jp = ref_streams(jp_extra={3: (REF_CALL, 0x2040)})
+    us.refs[3] = (REF_CALL, 0x1030)
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.run()
+    assert cm.units[2].status == "unmatched" and cm.units[2].note == "call targets disagree"
+
+    # A located unit never survives run().
+    us, jp = ref_streams()
+    jp.norm[14] = 0x999
+    cm = CodeMatcher(us, jp, units(), log=lambda *x: None)
+    cm.run()
+    assert cm.units[2].status == "unmatched" and cm.units[2].note == "located but not resolved"
+    assert cm.stats["located"] == 1
+
+
+def test_padding_and_chunk_confidence():
+    # Padding next to a body-changed unit is kept: the unit resets the anchor.
+    us = plain_stream(0x1000, [1, 2, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10])
+    jp = plain_stream(0x2000, [1, 2, 3, 4, 50, 60, 0, 0, 7, 8, 9, 10])
+    a = Unit(0x1000, 0x1010, 0x1000, "a", True, 0x2000, 0x2010, "same", "exact", 1.0, 1.0)
+    b = Unit(0x1010, 0x1018, 0x1010, "b", True, 0x2010, 0x2018, "body-changed", "diff", 0.7, 0.7)
+    c = Unit(0x1020, 0x1030, 0x1020, "c", True, 0x2020, 0x2030, "same", "exact", 1.0, 1.0)
+    cm = CodeMatcher(us, jp, [a, b, c], log=lambda *x: None)
+    assert [(r.us_start, r.us_end) for r in cm.code_ranges()] ==         [(0x1000, 0x1010), (0x1018, 0x1030)]
+
+    # A downgraded function carries the lowest chunk confidence.
+    t = Unit(0x1030, 0x1038, 0x1000, "a", False, status="unmatched")
+    cm = CodeMatcher(us, jp, [a, t], log=lambda *x: None)
+    f = cm.functions()[0]
+    assert f.status == "body-changed" and f.confidence == 0.0, f
+
+
 def test_load_units():
     d = tempfile.mkdtemp()
     try:
@@ -457,6 +547,14 @@ def test_real_binaries():
         nfunc, same, bc, un = (int(mc.group(k)) for k in (1, 3, 4, 5))
         assert same >= 6000 and same + bc + un == nfunc, code[0]
         assert len(m.functions) == nfunc
+        calls = [l for l in text.splitlines() if l.startswith("calls: ")]
+        mk = re.match(r"calls: (\d+) pairs checked, (\d+) conflicts \(([\d.]+)%\); "
+                      r"placed by call (\d+), located (\d+), gap-filled (\d+)$",
+                      calls[0] if calls else "")
+        assert mk, text
+        pairs, conflicts = int(mk.group(1)), int(mk.group(2))
+        assert pairs > 1000 and conflicts * 200 <= pairs, calls[0]
+        assert un < 764, code[0]
         assert m.translate(0x31C138) == 0x31C460
         entry = run_tool("lookup", path, "0x31C138").split()
         assert entry[:4] == ["0031C138", "->", "0031C460", ".text"] and entry[4] == "same"
@@ -470,6 +568,8 @@ test_json_roundtrip()
 test_normalize_synthetic()
 test_find_gp()
 test_exact_pass_synthetic()
+test_reference_propagation()
+test_padding_and_chunk_confidence()
 test_load_units()
 
 if os.path.isfile(US) and os.path.isfile(JP):
