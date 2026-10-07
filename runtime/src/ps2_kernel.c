@@ -13,10 +13,8 @@ int ps2_time_up(void);
 void ps2_finish(const char *why);
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <sched.h>
+#include "ps2_os.h"
 #include <time.h>
-#include <unistd.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -43,8 +41,8 @@ typedef struct {
     u32 arg;
     int started, exited;
     int terminate_requested;
-    pthread_t th;
-    pthread_cond_t cv;
+    ps2_thread_t th;
+    ps2_cond_t cv;
     ps2_ctx ctx;
 } ps2_thread;
 
@@ -68,7 +66,7 @@ static ps2_handler dmac_h[PS2_MAX_HANDLER];
 
 static u32 dmac_handler_mask;
 
-static pthread_mutex_t ee_lock = PTHREAD_MUTEX_INITIALIZER;
+static ps2_mutex_t ee_lock = PS2_MUTEX_INIT;
 
 #define TID_NONE (-1)
 #define TID_INTR (-2)
@@ -96,7 +94,7 @@ static volatile u32 vblank_pending;
 static volatile u64 vblank_delivered;
 static volatile u64 vblank_generated;
 static volatile u64 vblank_missed;
-static pthread_t vblank_th;
+static ps2_thread_t vblank_th;
 static int vblank_running;
 
 void ps2_gs_vblank(void);
@@ -189,9 +187,9 @@ static int run_pending_vblanks(int owner) {
         __atomic_fetch_sub(&vblank_pending, 1, __ATOMIC_ACQ_REL);
         current_tid = TID_INTR;
         in_intr = 1;
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         deliver_vblank();
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         in_intr = 0;
         current_tid = owner;
         did = 1;
@@ -202,7 +200,6 @@ static int run_pending_vblanks(int owner) {
 static void yield_to_scheduler(int self) {
     for (;;) {
         int next;
-        struct timespec ts;
 
         if (threads[self].terminate_requested) retire_thread_locked(self);
         if (kernel_exit_requested) return;
@@ -216,16 +213,13 @@ static void yield_to_scheduler(int self) {
         if (next >= 0) {
             current_tid = next;
             threads[next].status = THS_RUN;
-            pthread_cond_signal(&threads[next].cv);
+            ps2_cond_signal(&threads[next].cv);
         } else if (current_tid == TID_NONE
                    && __atomic_load_n(&vblank_pending, __ATOMIC_RELAXED)) {
             if (run_pending_vblanks(TID_NONE)) continue;
         }
 
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += 2000000;
-        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-        pthread_cond_timedwait(&threads[self].cv, &ee_lock, &ts);
+        ps2_cond_wait_ms(&threads[self].cv, &ee_lock, 2);
     }
 }
 
@@ -255,7 +249,7 @@ static void make_ready(int tid) {
     }
     if (threads[tid].status == THS_WAIT) {
         threads[tid].status = THS_READY;
-        pthread_cond_signal(&threads[tid].cv);
+        ps2_cond_signal(&threads[tid].cv);
     }
 }
 
@@ -267,7 +261,7 @@ static void release_token(int self) {
     if (next < 0) return;
     current_tid = next;
     threads[next].status = THS_RUN;
-    pthread_cond_signal(&threads[next].cv);
+    ps2_cond_signal(&threads[next].cv);
 }
 
 static void retire_thread_locked(int self) {
@@ -278,14 +272,14 @@ static void retire_thread_locked(int self) {
     t->status = THS_DORMANT;
     t->exited = 1;
     release_token(self);
-    pthread_mutex_unlock(&ee_lock);
-    pthread_exit(NULL);
+    ps2_mutex_unlock(&ee_lock);
+    ps2_thread_exit();
 }
 
 static void check_thread_termination(void) {
     if (in_intr || self_tid <= 0) return;
     if (!__atomic_load_n(&threads[self_tid].terminate_requested, __ATOMIC_RELAXED)) return;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     retire_thread_locked(self_tid);
 }
 
@@ -293,11 +287,11 @@ static void *thread_trampoline(void *arg) {
     ps2_thread *t = (ps2_thread *)arg;
     int self = (int)(t - threads);
     self_tid = self;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     while (current_tid != self && !kernel_exit_requested && !t->terminate_requested)
-        pthread_cond_wait(&t->cv, &ee_lock);
+        ps2_cond_wait(&t->cv, &ee_lock);
     if (t->terminate_requested) retire_thread_locked(self);
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     if (kernel_exit_requested) return NULL;
 
     t->ctx.r[29].ud[0] = t->stack + t->stack_size - 16;
@@ -308,11 +302,11 @@ static void *thread_trampoline(void *arg) {
             self, t->entry, (u32)t->ctx.r[29].ud[0], (u32)t->gp);
     ps2_dispatch(&t->ctx, t->entry);
 
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     t->status = THS_DORMANT;
     t->exited = 1;
     release_token(self);
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     return NULL;
 }
 
@@ -329,12 +323,11 @@ static void s32w(u32 a, u32 v) { ps2_w32(a, v); }
 static int sys_create_thread(ps2_ctx *ctx) {
     u32 p = A0;
     int i;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     for (i = 1; i < PS2_MAX_THREADS; i++)
         if (!threads[i].used && (!threads[i].started || threads[i].exited)) break;
-    if (i >= PS2_MAX_THREADS) { pthread_mutex_unlock(&ee_lock); return -1; }
-    if (threads[i].started) pthread_join(threads[i].th, NULL);
-    if (threads[i].entry) pthread_cond_destroy(&threads[i].cv);
+    if (i >= PS2_MAX_THREADS) { ps2_mutex_unlock(&ee_lock); return -1; }
+    if (threads[i].started) ps2_thread_join(threads[i].th);
     memset(&threads[i], 0, sizeof(threads[i]));
     threads[i].used = 1;
     threads[i].status = THS_DORMANT;
@@ -346,23 +339,23 @@ static int sys_create_thread(ps2_ctx *ctx) {
     threads[i].cur_prio   = threads[i].init_prio;
     threads[i].attr       = g32(p + 28);
     threads[i].option     = g32(p + 32);
-    pthread_cond_init(&threads[i].cv, NULL);
+    ps2_cond_init(&threads[i].cv);
     ps2_log("kernel: CreateThread(param=%08X) -> id %d "
             "entry=%08X stack=%08X size=%u gp=%08X prio=%d",
             p, i, threads[i].entry, threads[i].stack, threads[i].stack_size,
             threads[i].gp, threads[i].init_prio);
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     return i;
 }
 
 static void sys_start_thread(ps2_ctx *ctx) {
     int id = (int)A0;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     if (id <= 0 || id >= PS2_MAX_THREADS || !threads[id].used ||
         threads[id].status != THS_DORMANT || (threads[id].started && !threads[id].exited)) {
-        pthread_mutex_unlock(&ee_lock); RET(-1); return;
+        ps2_mutex_unlock(&ee_lock); RET(-1); return;
     }
-    if (threads[id].started) pthread_join(threads[id].th, NULL);
+    if (threads[id].started) ps2_thread_join(threads[id].th);
     threads[id].started = threads[id].exited = 0;
     __atomic_store_n(&threads[id].terminate_requested, 0, __ATOMIC_RELAXED);
     memset(&threads[id].ctx, 0, sizeof(threads[id].ctx));
@@ -373,12 +366,12 @@ static void sys_start_thread(ps2_ctx *ctx) {
     threads[id].ctx.vu0.vf[0].f[3] = 1.0f;
     threads[id].arg = A1;
     threads[id].status = THS_READY;
-    if (pthread_create(&threads[id].th, NULL, thread_trampoline, &threads[id]) != 0) {
+    if (ps2_thread_create(&threads[id].th, thread_trampoline, &threads[id]) != 0) {
         threads[id].status = THS_DORMANT;
-        pthread_mutex_unlock(&ee_lock); RET(-1); return;
+        ps2_mutex_unlock(&ee_lock); RET(-1); return;
     }
     threads[id].started = 1;
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     RET(id);
 }
 
@@ -386,10 +379,10 @@ static void sys_refer_thread_status(ps2_ctx *ctx) {
     int id = (int)A0;
     u32 p = A1;
     ps2_thread *t;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     if (id == 0) id = self_tid;
     if (id < 0 || id >= PS2_MAX_THREADS || !threads[id].used) {
-        pthread_mutex_unlock(&ee_lock); RET(-1); return;
+        ps2_mutex_unlock(&ee_lock); RET(-1); return;
     }
     t = &threads[id];
     if (p) {
@@ -407,7 +400,7 @@ static void sys_refer_thread_status(ps2_ctx *ctx) {
         s32w(p + 44, (u32)t->wakeup_count);
     }
     RET(t->status);
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
 }
 
 static int sys_create_sema(ps2_ctx *ctx) {
@@ -439,23 +432,23 @@ static int trace_sema(void) {
 static void sys_wait_sema(ps2_ctx *ctx) {
     int id = (int)A0;
     int self = self_tid;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     if (id <= 0 || id >= PS2_MAX_SEMA || !semas[id].used) {
-        pthread_mutex_unlock(&ee_lock); RET(-1); return;
+        ps2_mutex_unlock(&ee_lock); RET(-1); return;
     }
     u32 generation = semas[id].generation;
     for (;;) {
         if (!semas[id].used || semas[id].generation != generation) {
-            pthread_mutex_unlock(&ee_lock); RET(-1); return;
+            ps2_mutex_unlock(&ee_lock); RET(-1); return;
         }
         if (semas[id].count > 0) { semas[id].count--; break; }
         if (in_intr || self < 0) {
-            pthread_mutex_unlock(&ee_lock);
+            ps2_mutex_unlock(&ee_lock);
             RET(-1);
             return;
         }
         if (kernel_exit_requested) {
-            pthread_mutex_unlock(&ee_lock);
+            ps2_mutex_unlock(&ee_lock);
             RET(-1);
             return;
         }
@@ -466,17 +459,17 @@ static void sys_wait_sema(ps2_ctx *ctx) {
         block_self_locked(THS_WAIT);
         threads[self].waiting_sema = 0;
         if (semas[id].generation == generation && semas[id].wait_threads > 0) semas[id].wait_threads--;
-        if (!semas[id].used) { pthread_mutex_unlock(&ee_lock); RET(-1); return; }
+        if (!semas[id].used) { ps2_mutex_unlock(&ee_lock); RET(-1); return; }
     }
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     RET(id);
 }
 
 static void sys_signal_sema(ps2_ctx *ctx) {
     int id = (int)A0;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     if (id <= 0 || id >= PS2_MAX_SEMA || !semas[id].used) {
-        pthread_mutex_unlock(&ee_lock); RET(-1); return;
+        ps2_mutex_unlock(&ee_lock); RET(-1); return;
     }
     if (trace_sema())
         ps2_log("sema: thread %d signals sema %d (count %d)",
@@ -495,7 +488,7 @@ static void sys_signal_sema(ps2_ctx *ctx) {
                     best >= 0 ? "wakes thread " : "no waiter (", best);
         if (best >= 0) make_ready(best);
     }
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     RET(id);
 }
 
@@ -503,25 +496,25 @@ static void offer_token(void) {
     check_thread_termination();
     int self, next;
     if (in_intr) return;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     self = self_tid;
     if (self < 0 || current_tid != self || kernel_exit_requested) {
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         return;
     }
     next = pick_next(self);
     if (next < 0 || threads[next].cur_prio >= threads[self].cur_prio) {
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         return;
     }
     threads[self].status = THS_READY;
     current_tid = next;
     threads[next].status = THS_RUN;
-    pthread_cond_signal(&threads[next].cv);
+    ps2_cond_signal(&threads[next].cv);
     yield_to_scheduler(self);
     threads[self].status = THS_RUN;
     current_tid = self;
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
 }
 
 static u64 ps2_preempt_calls;
@@ -539,49 +532,48 @@ void ps2_preempt(void) {
         }
         return;
     }
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     self = self_tid;
     if (self >= 0 && current_tid == self) {
         run_pending_vblanks(self);
         if (ps2_dmac_pending()) {
             current_tid = TID_INTR;
             in_intr = 1;
-            pthread_mutex_unlock(&ee_lock);
+            ps2_mutex_unlock(&ee_lock);
             run_dmac_completions();
-            pthread_mutex_lock(&ee_lock);
+            ps2_mutex_lock(&ee_lock);
             in_intr = 0;
             current_tid = self;
         }
     }
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     offer_token();
 }
 
 static void sys_exit_thread(int delete_it) {
     int self = self_tid;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     threads[self].status = THS_DORMANT;
     threads[self].exited = 1;
     threads[self].waiting_sema = 0;
     if (delete_it) threads[self].used = 0;
     release_token(self);
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     if (self == 0) {
         for (;;) {
-            struct timespec ts = { 0, 20 * 1000 * 1000 };
-            nanosleep(&ts, NULL);
+            ps2_sleep_ms(20);
         }
     }
-    pthread_exit(NULL);
+    ps2_thread_exit();
 }
 
 static void sys_rotate_ready_queue(ps2_ctx *ctx) {
     int prio = (int)A0;
     int self = self_tid;
     int next = -1, i;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     if (self < 0 || current_tid != self || kernel_exit_requested) {
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         RET(self); return;
     }
     if ((int)A0 == 0) prio = threads[self].cur_prio;
@@ -602,7 +594,7 @@ static void sys_rotate_ready_queue(ps2_ctx *ctx) {
         threads[self].status = THS_READY;
         current_tid = next;
         threads[next].status = THS_RUN;
-        pthread_cond_signal(&threads[next].cv);
+        ps2_cond_signal(&threads[next].cv);
         yield_to_scheduler(self);
         threads[self].status = THS_RUN;
         current_tid = self;
@@ -610,7 +602,7 @@ static void sys_rotate_ready_queue(ps2_ctx *ctx) {
         run_pending_vblanks(self);
         next = self;
     }
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     RET(next);
 }
 
@@ -687,15 +679,15 @@ void ps2_syscall(ps2_ctx *ctx) {
     case 32: RET(sys_create_thread(ctx)); return;
     case 33: {
         int id = (int)A0, result = -1;
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (id > 0 && id < PS2_MAX_THREADS && threads[id].used &&
             threads[id].status == THS_DORMANT) {
             threads[id].used = 0;
             __atomic_store_n(&threads[id].terminate_requested, 1, __ATOMIC_RELAXED);
-            pthread_cond_signal(&threads[id].cv);
+            ps2_cond_signal(&threads[id].cv);
             result = 0;
         }
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         RET(result); return;
     }
     case 34: sys_start_thread(ctx); return;
@@ -706,20 +698,20 @@ void ps2_syscall(ps2_ctx *ctx) {
         return;
     case 37: {
         int id = (int)A0, join_host = 0;
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (id <= 0 || id >= PS2_MAX_THREADS || !threads[id].used) {
-            pthread_mutex_unlock(&ee_lock); RET(-1); return;
+            ps2_mutex_unlock(&ee_lock); RET(-1); return;
         }
         __atomic_store_n(&threads[id].terminate_requested, 1, __ATOMIC_RELAXED);
         threads[id].status = THS_DORMANT;
-        pthread_cond_signal(&threads[id].cv);
+        ps2_cond_signal(&threads[id].cv);
         join_host = id != self_tid && threads[id].started;
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         if (join_host) {
-            pthread_join(threads[id].th, NULL);
-            pthread_mutex_lock(&ee_lock);
+            ps2_thread_join(threads[id].th);
+            ps2_mutex_lock(&ee_lock);
             threads[id].started = 0;
-            pthread_mutex_unlock(&ee_lock);
+            ps2_mutex_unlock(&ee_lock);
         }
         check_thread_termination();
         RET(0); return;
@@ -730,66 +722,66 @@ void ps2_syscall(ps2_ctx *ctx) {
         if (id <= 0 || id >= PS2_MAX_THREADS || !threads[id].used) {
             RET(-1); return;
         }
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         old = threads[id].cur_prio;
         threads[id].cur_prio = (int)A1;
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         offer_token();
         RET(old); return;
     }
     case 43: sys_rotate_ready_queue(ctx); return;
     case 45: {
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         make_ready((int)A0);
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         RET(0); return;
     }
     case 47: RET(self_tid); return;
     case 48: sys_refer_thread_status(ctx); return;
     case 50: {
         int self = self_tid;
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (threads[self].wakeup_count > 0) {
             threads[self].wakeup_count--;
-            pthread_mutex_unlock(&ee_lock);
+            ps2_mutex_unlock(&ee_lock);
             RET(0);
             return;
         }
         block_self_locked(THS_WAIT);
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         RET(0);
         return;
     }
     case 51: case 52: {
         int id = (int)A0;
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (id > 0 && id < PS2_MAX_THREADS && threads[id].used) {
             if (threads[id].status == THS_WAIT
                 || threads[id].status == THS_WAITSUSPEND) make_ready(id);
             else threads[id].wakeup_count++;
         }
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         offer_token();
         RET(id);
         return;
     }
     case 53: case 54:
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if ((int)A0 > 0 && (int)A0 < PS2_MAX_THREADS)
             threads[A0].wakeup_count = 0;
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         RET(0); return;
     case 55: case 56: {
         int id = (int)A0;
         if (id <= 0 || id >= PS2_MAX_THREADS || !threads[id].used) {
             RET(-1); return;
         }
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (threads[id].status == THS_WAIT)
             threads[id].status = THS_WAITSUSPEND;
         else if (threads[id].status != THS_WAITSUSPEND)
             threads[id].status = THS_SUSPEND;
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         RET(0); return;
     }
     case 57: case 58: {
@@ -797,59 +789,59 @@ void ps2_syscall(ps2_ctx *ctx) {
         if (id <= 0 || id >= PS2_MAX_THREADS || !threads[id].used) {
             RET(-1); return;
         }
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (threads[id].status == THS_WAITSUSPEND) {
             threads[id].status = THS_WAIT;
         } else if (threads[id].status == THS_SUSPEND) {
             threads[id].status = THS_READY;
-            pthread_cond_signal(&threads[id].cv);
+            ps2_cond_signal(&threads[id].cv);
         }
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         offer_token();
         RET(0); return;
     }
 
     case 64: {
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         int id = sys_create_sema(ctx);
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         RET(id); return;
     }
     case 65:
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if ((int)A0 > 0 && (int)A0 < PS2_MAX_SEMA) {
             semas[A0].used = 0;
             semas[A0].generation++;
             for (int i = 1; i < PS2_MAX_THREADS; i++)
                 if (threads[i].waiting_sema == (int)A0) make_ready(i);
         }
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         offer_token(); RET(0); return;
     case 66: sys_signal_sema(ctx); offer_token(); return;
     case 67: sys_signal_sema(ctx); return;
     case 68: sys_wait_sema(ctx); return;
     case 69: {
         int id = (int)A0;
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (id > 0 && id < PS2_MAX_SEMA && semas[id].used && semas[id].count > 0) {
             semas[id].count--;
             RET(id);
         } else RET(-1);
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         return;
     }
     case 70: {
         int id = (int)A0;
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         if (id > 0 && id < PS2_MAX_SEMA && semas[id].used && semas[id].count > 0)
             { semas[id].count--; RET(id); }
         else RET(-1);
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         return;
     }
     case 71: case 72: {
         int id = (int)A0;
-        pthread_mutex_lock(&ee_lock);
+        ps2_mutex_lock(&ee_lock);
         u32 p = A1;
         if (id > 0 && id < PS2_MAX_SEMA && semas[id].used && p) {
             s32w(p + 0, (u32)semas[id].count);
@@ -860,7 +852,7 @@ void ps2_syscall(ps2_ctx *ctx) {
             s32w(p + 20, semas[id].option);
             RET(id);
         } else RET(-1);
-        pthread_mutex_unlock(&ee_lock);
+        ps2_mutex_unlock(&ee_lock);
         return;
     }
 
@@ -1104,10 +1096,10 @@ static void deliver_vblank(void) {
     }
     if (ps2_state_dump_pending()) {
         static unsigned waited;
-        if (pthread_mutex_trylock(&ee_lock) == 0) {
+        if (ps2_mutex_trylock(&ee_lock) == 0) {
             waited = 0;
             ps2_state_dump_numbered("EE idle, consistent");
-            pthread_mutex_unlock(&ee_lock);
+            ps2_mutex_unlock(&ee_lock);
         } else if (++waited >= 60u) {
             waited = 0;
             ps2_state_dump_numbered("EE LOCK HELD -- copy may be torn");
@@ -1173,9 +1165,7 @@ static void report_stall(u64 fields, unsigned secs) {
 #define FIELD_NS 16683333ull
 
 static u64 mono_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+    return ps2_mono_ns();
 }
 
 static void sleep_until(u64 deadline) {
@@ -1196,10 +1186,7 @@ static void sleep_until(u64 deadline) {
             continue;
         }
 #endif
-        struct timespec ts;
-        ts.tv_sec = (time_t)(d / 1000000000ull);
-        ts.tv_nsec = (long)(d % 1000000000ull);
-        nanosleep(&ts, NULL);
+        ps2_sleep_ms((unsigned)((d + 999999u) / 1000000u));
     }
 }
 
@@ -1228,7 +1215,7 @@ static void *vblank_timer(void *unused) {
     field_timer = CreateWaitableTimerExW(NULL, NULL,
         CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
     ps2_log("clock: %s; absolute 59.94-Hz field deadlines (unless PS2_FIELD_HZ overrides)",
-        field_timer ? "Windows high-resolution waitable timer" : "fallback nanosleep");
+        field_timer ? "Windows high-resolution waitable timer" : "fallback sleep");
 #endif
     while (vblank_running) {
         u64 now;
@@ -1249,9 +1236,9 @@ static void *vblank_timer(void *unused) {
             continue;
         }
         if (++quiet < next_report * 60u) continue;
-        if (pthread_mutex_trylock(&ee_lock) == 0) {
+        if (ps2_mutex_trylock(&ee_lock) == 0) {
             report_stall(now, quiet / 60u);
-            pthread_mutex_unlock(&ee_lock);
+            ps2_mutex_unlock(&ee_lock);
         } else {
             ps2_log("==== STALL: no vertical blank for %u s, and the kernel "
                     "lock is held ====", quiet / 60u);
@@ -1290,9 +1277,9 @@ void ps2_kernel_poll_vblank(void) {
     if (in_intr) return;
     if (!__atomic_load_n(&vblank_pending, __ATOMIC_RELAXED)) return;
     if (self < 0) return;
-    pthread_mutex_lock(&ee_lock);
+    ps2_mutex_lock(&ee_lock);
     run_pending_vblanks(self);
-    pthread_mutex_unlock(&ee_lock);
+    ps2_mutex_unlock(&ee_lock);
     offer_token();
 }
 
@@ -1369,12 +1356,12 @@ void ps2_kernel_init(void) {
     threads[0].status = THS_RUN;
     threads[0].cur_prio = 64;
     threads[0].init_prio = 64;
-    pthread_cond_init(&threads[0].cv, NULL);
+    ps2_cond_init(&threads[0].cv);
     current_tid = 0;
     intr_stack_top = 0x01EFFF00u;
     vblank_running = 1;
-    pthread_create(&vblank_th, NULL, vblank_timer, NULL);
-    pthread_detach(vblank_th);
+    ps2_thread_create(&vblank_th, vblank_timer, NULL);
+    ps2_thread_detach(vblank_th);
 }
 
 void ps2_timers_report(void);
