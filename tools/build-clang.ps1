@@ -2,8 +2,8 @@
 # Usage (repo root): powershell -File tools/build-clang.ps1 [-BuildDir build/clang] [<extra cmake configure args>]
 #
 # Needs LLVM clang 19 or newer on PATH (GNU-style clang driver, not clang-cl),
-# Visual Studio 2026 (18.x) or its Build Tools with the C++ x64 tools and a
-# Windows SDK, and the Vulkan SDK. The script enters the Visual Studio developer
+# Visual Studio 2022 or newer (or its Build Tools) with the C++ x64 tools and
+# a Windows SDK, and the Vulkan SDK. The script enters the Visual Studio developer
 # environment itself. The SDL3 VC devel package is downloaded into deps/
 # (git-ignored) on first run.
 
@@ -64,12 +64,13 @@ if ($env:VSCMD_VER) {
   $vsPath = $env:VSINSTALLDIR.TrimEnd('\')
 } else {
   $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-  if (-not (Test-Path $vswhere)) { throw 'vswhere not found; install Visual Studio 2026 with the C++ x64 tools' }
-  $vsQuery = @('-version', '[18.0,19.0)', '-products', '*', '-latest',
+  if (-not (Test-Path $vswhere)) { throw 'vswhere not found; install Visual Studio 2022 or newer with the C++ x64 tools' }
+  # A lone version is a minimum; -latest then picks the newest install.
+  $vsQuery = @('-version', '17.0', '-products', '*', '-latest',
                '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64')
   $vsId = (& $vswhere @vsQuery -property instanceId | Select-Object -First 1)
   $vsPath = (& $vswhere @vsQuery -property installationPath | Select-Object -First 1)
-  if (-not $vsId) { throw 'Visual Studio 2026 (18.x) with the C++ tools was not found; install the "Desktop development with C++" workload' }
+  if (-not $vsId) { throw 'Visual Studio 2022 or newer with the C++ tools was not found; install the "Desktop development with C++" workload' }
   # VsDevCmd's own scripts call vswhere by name, which is not on PATH by default.
   $env:PATH = "$(Split-Path -Parent $vswhere);$env:PATH"
   Import-Module (Join-Path $vsPath 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
