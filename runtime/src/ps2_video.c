@@ -115,7 +115,9 @@ static volatile int window_closed;
 static volatile int swap_dirty;
 static u64 stat_dropped;
 static u32 stall_drops;
-static SDL_ThreadID render_tid;
+static unsigned long render_tid;
+
+static u64 mono_ms(void) { return ps2_mono_ns() / 1000000u; }
 static int in_modal_redraw;
 static volatile int window_minimised;
 #define VK_WAIT_NS (100ull * 1000ull * 1000ull)
@@ -560,8 +562,8 @@ static const char *shader_dir(char *buf, size_t cap) {
         f = fopen(probe, "rb");
         if (f) { fclose(f); snprintf(buf, cap, "%s", cand[i]); return buf; }
     }
-    bp = SDL_GetBasePath();
-    if (bp) {
+    bp = ps2_exe_dir();
+    if (*bp) {
         snprintf(probe, sizeof probe, "%sshaders/gs.vert.spv", bp);
         f = fopen(probe, "rb");
         if (f) { fclose(f); snprintf(buf, cap, "%sshaders", bp); return buf; }
@@ -911,11 +913,9 @@ static VkPipeline get_pipeline_ex(u32 topology, u32 blend, u32 depth, u32 mesh, 
 
 static const char *pipe_cache_prefix(char *buf, size_t cap) {
     const char *e = getenv("PS2_PIPELINE_CACHE");
-    const char *base;
     if (e && *e == '0' && !e[1]) return NULL;
     if (e && *e) { snprintf(buf, cap, "%s", e); return buf; }
-    base = SDL_GetBasePath();
-    snprintf(buf, cap, "%sac5_pipelines", base ? base : "");
+    snprintf(buf, cap, "%sac5_pipelines", ps2_exe_dir());
     return buf;
 }
 
@@ -4210,9 +4210,9 @@ static int take_pending_frame(void) {
 }
 
 static void update_title(void) {
-    static Uint64 last_ms;
+    static u64 last_ms;
     static u64 last_frames, last_dropped;
-    Uint64 now = SDL_GetTicks();
+    u64 now = mono_ms();
     u64 fields = ps2_kernel_vblank_count();
     static u64 last_fields;
     char buf[192];
@@ -4297,7 +4297,7 @@ static int field_present_due(void) {
 static u32 choose_scale(u32 need_w, u32 need_h) {
     static int env = -2;
     static u32 auto_last, asked_last;
-    static Uint64 auto_since;
+    static u64 auto_since;
     u32 s, lim, big;
     int want;
     if (env == -2) {
@@ -4320,9 +4320,9 @@ static u32 choose_scale(u32 need_w, u32 need_h) {
     if (want <= 0) {
         if (auto_scale_target != auto_last) {
             auto_last = auto_scale_target;
-            auto_since = SDL_GetTicks();
+            auto_since = mono_ms();
         }
-        s = !rts[0].created || SDL_GetTicks() - auto_since >= 250
+        s = !rts[0].created || mono_ms() - auto_since >= 250
           ? auto_last : rt_scale;
     } else {
         s = (u32)want;
@@ -4372,7 +4372,7 @@ static void replay_frame_inner(void) {
 static bool SDLCALL modal_redraw_watch(void *ud, SDL_Event *e) {
     (void)ud;
     if (!vk_ready || in_modal_redraw || window_minimised) return true;
-    if (SDL_GetCurrentThreadID() != render_tid) return true;
+    if (ps2_thread_self_id() != render_tid) return true;
     switch (e->type) {
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_RESIZED:
@@ -4394,15 +4394,15 @@ static bool SDLCALL modal_redraw_watch(void *ud, SDL_Event *e) {
 
 static void test_render_stall(void) {
     static int ms = -1;
-    static Uint64 next;
-    Uint64 now;
+    static u64 next;
+    u64 now;
     if (ms == -1) ms = (int)env_flag("PS2_TEST_RENDER_STALL");
     if (ms <= 0) return;
-    now = SDL_GetTicks();
+    now = mono_ms();
     if (now < next) return;
     next = now + 2000;
     ps2_log("vk: test stall, holding the renderer for %d ms", ms);
-    SDL_Delay((Uint32)ms);
+    ps2_sleep_ms((unsigned)ms);
 }
 
 static void apply_window_settings(void) {
@@ -4433,13 +4433,13 @@ static void apply_window_settings(void) {
 }
 
 static void settings_service(void) {
-    static Uint64 save_at;
+    static u64 save_at;
     int d = ps2_settings_take_dirty();
     if (d & PS2_CFG_WINDOW) apply_window_settings();
     if (d & PS2_CFG_SWAPCHAIN) swap_dirty = 1;
     if (d & PS2_CFG_FPS) fps_cap_apply_settings();
-    if (d & PS2_CFG_SAVE) save_at = SDL_GetTicks() + 750;
-    if (save_at && SDL_GetTicks() >= save_at) {
+    if (d & PS2_CFG_SAVE) save_at = mono_ms() + 750;
+    if (save_at && mono_ms() >= save_at) {
         save_at = 0;
         ps2_settings_save();
     }
@@ -4544,7 +4544,7 @@ static void pump_events(void) {
 
 static void *renderer_main(void *arg) {
     (void)arg;
-    render_tid = SDL_GetCurrentThreadID();
+    render_tid = ps2_thread_self_id();
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         ps2_log("vk: SDL_Init: %s", SDL_GetError());
         ps2_mutex_lock(&list_lock);

@@ -1,6 +1,7 @@
 #include "ps2_runtime.h"
 #include "ps2_settings.h"
 #include "ps2_addr.h"
+#include "ps2_os.h"
 
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -295,9 +296,9 @@ void ps2_settings_disable_file(void) {
 const char *ps2_settings_path(void) {
     if (!cfg_path[0]) {
         const char *e = getenv("PS2_SETTINGS_FILE");
-        const char *base = SDL_GetBasePath();
+        const char *base = ps2_exe_dir();
         if (e && *e) snprintf(cfg_path, sizeof cfg_path, "%s", e);
-        else snprintf(cfg_path, sizeof cfg_path, "%sac5_settings.ini", base ? base : "");
+        else snprintf(cfg_path, sizeof cfg_path, "%sac5_settings.ini", base);
     }
     return cfg_path;
 }

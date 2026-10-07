@@ -126,6 +126,35 @@ void ps2_sleep_ms(unsigned ms)
     Sleep(ms);
 }
 
+static INIT_ONCE exe_dir_once = INIT_ONCE_STATIC_INIT;
+static char exe_dir_buf[1024];
+
+static BOOL CALLBACK exe_dir_init(PINIT_ONCE once, PVOID param, PVOID *ctx)
+{
+    (void)once; (void)param; (void)ctx;
+    DWORD n = GetModuleFileNameA(NULL, exe_dir_buf, sizeof exe_dir_buf);
+    /* 0 is a failure and == size is a truncated path; neither is usable. */
+    if (n == 0 || n >= sizeof exe_dir_buf) {
+        exe_dir_buf[0] = '\0';
+        return TRUE;
+    }
+    char *cut = NULL;
+    for (char *p = exe_dir_buf; *p; p++)
+        if (*p == '\\' || *p == '/')
+            cut = p;
+    if (cut)
+        cut[1] = '\0';
+    else
+        exe_dir_buf[0] = '\0';
+    return TRUE;
+}
+
+const char *ps2_exe_dir(void)
+{
+    InitOnceExecuteOnce(&exe_dir_once, exe_dir_init, NULL, NULL);
+    return exe_dir_buf;
+}
+
 struct ps2_dir {
     HANDLE h;
     WIN32_FIND_DATAA fd;

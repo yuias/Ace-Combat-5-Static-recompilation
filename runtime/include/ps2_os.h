@@ -42,6 +42,11 @@ unsigned long ps2_thread_self_id(void);
 uint64_t ps2_mono_ns(void);                /* monotonic, arbitrary origin */
 void ps2_sleep_ms(unsigned ms);
 
+/* Directory of the running exe with a trailing backslash, in the ANSI code
+   page (the encoding narrow fopen expects); "" if unknown. Computed once;
+   callable from any thread. */
+const char *ps2_exe_dir(void);
+
 typedef struct ps2_dir ps2_dir;
 ps2_dir *ps2_dir_open(const char *path);   /* NULL if path is empty or not listable */
 /* Next entry name, "." and ".." included; valid until the next call or
