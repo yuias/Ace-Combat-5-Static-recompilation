@@ -1,6 +1,12 @@
 #ifndef PS2_RUNTIME_H
 #define PS2_RUNTIME_H
 
+/* PS2_ENV uses plain getenv; the MSVC CRT marks it deprecated, which would
+   fail -Werror for every includer that does not define this itself. */
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+#  define _CRT_SECURE_NO_WARNINGS
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -38,7 +44,7 @@ typedef int64_t  s64;
 #  define PS2_NOIPA
 #endif
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) || defined(__clang__)
 #  define PS2_ENV(name) __extension__ ({                                       \
        static int ps2_env_cache_ = -1;                                         \
        if (ps2_env_cache_ < 0) ps2_env_cache_ = getenv(name) != NULL;          \
@@ -47,7 +53,7 @@ typedef int64_t  s64;
 #  define PS2_ENV(name) (getenv(name) != NULL)
 #endif
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) || defined(__clang__)
 #  define PS2_LIKELY(x)   __builtin_expect(!!(x), 1)
 #  define PS2_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #  define PS2_INLINE      static inline __attribute__((always_inline))
