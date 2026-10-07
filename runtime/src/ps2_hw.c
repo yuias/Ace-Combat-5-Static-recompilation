@@ -2,6 +2,7 @@
 #include "ps2_hle.h"
 #include "ps2_capture.h"
 #include "ps2_gfxq.h"
+#include "ps2_os.h"
 #include "rn.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,9 +69,7 @@ static u64 timer_reads, timer_irqs;
 static u64 timer_ticks_made[4];
 
 static u64 host_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+    return ps2_mono_ns();
 }
 
 static u64 timer_rate(u32 mode) {

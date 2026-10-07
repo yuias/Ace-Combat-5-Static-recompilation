@@ -5,7 +5,7 @@
 #include <stdarg.h>
 #include <math.h>
 #include <time.h>
-#include <pthread.h>
+#include "ps2_os.h"
 
 ps2_ctx ps2_cpu;
 const ps2_reg128 ps2_zero_q = {{0, 0}};
@@ -672,10 +672,7 @@ void ps2_phase_report(u64 fields) {
 
 double ps2_wall_seconds(void) {
     static u64 start;
-    struct timespec ts;
-    u64 now;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    now = (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+    u64 now = ps2_mono_ns();
     if (!start) { start = now; return 0.0; }
     return (double)(now - start) / 1e9;
 }
@@ -685,7 +682,7 @@ static struct { u32 addr; u64 n; } samp[PS2_SAMP_N];
 static unsigned samp_n;
 static u64 samp_total;
 static volatile int samp_running;
-static pthread_t samp_thread;
+static ps2_thread_t samp_thread;
 
 static void samp_record(u32 addr) {
     unsigned i;
@@ -701,9 +698,8 @@ static void samp_record(u32 addr) {
 static void *samp_main(void *unused) {
     (void)unused;
     while (samp_running) {
-        struct timespec ts = { 0, 1000000 };
         u32 pos, addr;
-        nanosleep(&ts, NULL);
+        ps2_sleep_ms(1);
         pos = __atomic_load_n(&ps2_trace_pos, __ATOMIC_RELAXED);
         addr = ps2_trace_ring[(pos - 1u) & (PS2_TRACE_RING - 1u)];
         if (addr) samp_record(addr);
@@ -719,7 +715,7 @@ void ps2_sampler_start(void) {
     return;
 #else
     samp_running = 1;
-    if (pthread_create(&samp_thread, NULL, samp_main, NULL) != 0)
+    if (ps2_thread_create(&samp_thread, samp_main, NULL) != 0)
         samp_running = 0;
 #endif
 }

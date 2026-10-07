@@ -5,8 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
-#include <pthread.h>
+#include "ps2_os.h"
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -45,7 +44,7 @@ static lua_cb **cbs;
 static unsigned ncbs, ccbs;
 static u64 refused_thread, refused_switch, refused_depth, stack_drift;
 
-static pthread_t lua_owner;
+static unsigned long lua_owner;
 static unsigned lua_depth;
 
 static int lua_enter(const char *what) {
@@ -56,7 +55,7 @@ static int lua_enter(const char *what) {
         return 0;
     }
     if (lua_depth) {
-        if (!pthread_equal(lua_owner, pthread_self())) {
+        if (lua_owner != ps2_thread_self_id()) {
             if (!refused_switch++)
                 ps2_log("lua: a %s arrived on another guest thread while a "
                         "Lua call was still open on the first; declined "
@@ -70,7 +69,7 @@ static int lua_enter(const char *what) {
             return 0;
         }
     } else {
-        lua_owner = pthread_self();
+        lua_owner = ps2_thread_self_id();
     }
     lua_depth++;
     return 1;
@@ -940,18 +939,18 @@ void ps2_lua_start(void) {
         const char *dir = ps2_mod_dir_at(i);
         char **names = NULL;
         unsigned nnames = 0, cnames = 0;
-        DIR *d;
-        struct dirent *e;
+        ps2_dir *d;
+        const char *name;
         lua_mod *M = NULL;
         if (!dir) continue;
-        d = opendir(dir);
+        d = ps2_dir_open(dir);
         if (!d) {
             ps2_log("lua: cannot open %s", dir);
             continue;
         }
-        while ((e = readdir(d)) != NULL) {
-            size_t len = strlen(e->d_name);
-            if (len < 5 || strcmp(e->d_name + len - 4, ".lua")) continue;
+        while ((name = ps2_dir_next(d)) != NULL) {
+            size_t len = strlen(name);
+            if (len < 5 || strcmp(name + len - 4, ".lua")) continue;
             if (nnames == cnames) {
                 cnames = cnames ? cnames * 2u : 8u;
                 names = (char **)realloc(names, cnames * sizeof *names);
@@ -959,10 +958,10 @@ void ps2_lua_start(void) {
             }
             names[nnames] = (char *)malloc(len + 1);
             if (!names[nnames]) ps2_fatal("lua: out of memory listing scripts");
-            memcpy(names[nnames], e->d_name, len + 1);
+            memcpy(names[nnames], name, len + 1);
             nnames++;
         }
-        closedir(d);
+        ps2_dir_close(d);
         if (nnames > 1) qsort(names, nnames, sizeof *names, name_cmp);
         for (unsigned k = 0; k < nnames; k++) {
             char path[1024];
