@@ -8,13 +8,13 @@
 #include "ps2_patch.h"
 #include "ps2_region.h"
 #include "ps2_vfs.h"
+#include "ps2_os.h"
 
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <dirent.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -242,27 +242,27 @@ static int host_size(const char *path, u64 *size, int *is_dir) {
     if (stat(path, &st) != 0) return -1;
 #endif
     *size = (u64)st.st_size;
-    *is_dir = S_ISDIR(st.st_mode);
+    *is_dir = ((st.st_mode & _S_IFMT) == _S_IFDIR);
     return 0;
 }
 
 static void scan_files(mod_info *m, const char *dir, const char *prefix,
                        int depth) {
-    DIR *d = opendir(dir);
-    struct dirent *e;
+    ps2_dir *d = ps2_dir_open(dir);
+    const char *name;
     if (!d) return;
-    while ((e = readdir(d)) != NULL) {
+    while ((name = ps2_dir_next(d)) != NULL) {
         char host[1024], rel[512];
         u64 size;
         int is_dir, hn, rn;
-        if (e->d_name[0] == '.') continue;
-        hn = snprintf(host, sizeof host, "%s/%s", dir, e->d_name);
+        if (name[0] == '.') continue;
+        hn = snprintf(host, sizeof host, "%s/%s", dir, name);
         rn = snprintf(rel, sizeof rel, "%s%s%s", prefix, *prefix ? "/" : "",
-                      e->d_name);
+                      name);
         if (hn < 0 || (size_t)hn >= sizeof host || rn < 0
             || (size_t)rn >= sizeof rel) {
             ps2_log("mod: %s: path too long, skipped: %s/%s", m->id, dir,
-                    e->d_name);
+                    name);
             continue;
         }
         if (host_size(host, &size, &is_dir) != 0) continue;
@@ -274,7 +274,7 @@ static void scan_files(mod_info *m, const char *dir, const char *prefix,
         ps2_vfs_claim(rel, host, size, m->priority, m->id);
         m->files++;
     }
-    closedir(d);
+    ps2_dir_close(d);
 }
 
 static int mod_order(const void *a, const void *b) {
@@ -347,7 +347,7 @@ static int requires_each(const mod_info *m, int (*fn)(const mod_info *m,
     char buf[256], *save = NULL, *item;
     int n = 0;
     snprintf(buf, sizeof buf, "%s", m->requires);
-    for (item = strtok_r(buf, ",", &save); item; item = strtok_r(NULL, ",", &save)) {
+    for (item = strtok_s(buf, ",", &save); item; item = strtok_s(NULL, ",", &save)) {
         char id[64] = "", op[3] = "", ver[32] = "";
         int got = sscanf(item, " %63[A-Za-z0-9_.-] %2[<>=] %31[0-9.]", id, op, ver);
         if (got != 1 && got != 3) return -1;
@@ -441,8 +441,8 @@ static void load_order_build(void) {
             if (mods[i].requires[0]) {
                 char buf[256], *save = NULL, *item;
                 snprintf(buf, sizeof buf, "%s", mods[i].requires);
-                for (item = strtok_r(buf, ",", &save); item;
-                     item = strtok_r(NULL, ",", &save)) {
+                for (item = strtok_s(buf, ",", &save); item;
+                     item = strtok_s(NULL, ",", &save)) {
                     char id[64] = "";
                     if (sscanf(item, " %63[A-Za-z0-9_.-]", id) == 1
                         && require_unplaced(&mods[i], id, "", "", placed))
@@ -468,10 +468,10 @@ static void load_order_build(void) {
 
 void ps2_mod_init(void) {
     const char *root = getenv("PS2_MOD_DIR");
-    DIR *d;
-    struct dirent *e;
+    ps2_dir *d;
+    const char *name;
     u32 enabled = 0, files = 0;
-    char symfile[PATH_MAX];
+    char symfile[MAX_PATH];
     symbols_load(ps2_region_config_path("game_symbols.txt", symfile,
                                         sizeof symfile), NULL);
     if (getenv("PS2_NO_MODS")) {
@@ -480,21 +480,21 @@ void ps2_mod_init(void) {
         return;
     }
     snprintf(mod_root, sizeof mod_root, "%s", (root && *root) ? root : "mods");
-    d = opendir(mod_root);
+    d = ps2_dir_open(mod_root);
     if (!d) {
         ps2_log("mod: no mods directory at '%s'", mod_root);
         return;
     }
-    while ((e = readdir(d)) != NULL) {
+    while ((name = ps2_dir_next(d)) != NULL) {
         char sub[1024];
         u64 size;
         int is_dir, sn;
         mod_info *m;
-        if (e->d_name[0] == '.') continue;
-        sn = snprintf(sub, sizeof sub, "%s/%s", mod_root, e->d_name);
+        if (name[0] == '.') continue;
+        sn = snprintf(sub, sizeof sub, "%s/%s", mod_root, name);
         if (sn < 0 || (size_t)sn >= sizeof sub) continue;
         if (host_size(sub, &size, &is_dir) != 0 || !is_dir) continue;
-        if (strlen(e->d_name) >= sizeof m->id || strlen(sub) >= sizeof m->dir) {
+        if (strlen(name) >= sizeof m->id || strlen(sub) >= sizeof m->dir) {
             ps2_log("mod: path too long, skipped: %s", sub);
             continue;
         }
@@ -505,12 +505,12 @@ void ps2_mod_init(void) {
         }
         m = &mods[nmods++];
         memset(m, 0, sizeof *m);
-        snprintf(m->id, sizeof m->id, "%s", e->d_name);
+        snprintf(m->id, sizeof m->id, "%s", name);
         snprintf(m->dir, sizeof m->dir, "%s", sub);
         m->enabled = 1;
         manifest_read(m);
     }
-    closedir(d);
+    ps2_dir_close(d);
 
     if (nmods > 1) qsort(mods, nmods, sizeof *mods, mod_order);
     for (u32 i = 0; i < nmods; i++)
@@ -628,20 +628,20 @@ static int str_cmp(const void *a, const void *b) {
 }
 
 static void natives_load(mod_info *m) {
-    DIR *d = opendir(m->dir);
-    struct dirent *e;
+    ps2_dir *d = ps2_dir_open(m->dir);
+    const char *name;
     char *names[64];
     unsigned n = 0;
     if (!d) return;
-    while ((e = readdir(d)) != NULL && n < 64) {
-        size_t len = strlen(e->d_name);
+    while ((name = ps2_dir_next(d)) != NULL && n < 64) {
+        size_t len = strlen(name);
         if (len < 5) continue;
-        if (strcmp(e->d_name + len - 4, ".dll") && strcmp(e->d_name + len - 4, ".DLL"))
+        if (strcmp(name + len - 4, ".dll") && strcmp(name + len - 4, ".DLL"))
             continue;
-        names[n] = strdup(e->d_name);
+        names[n] = strdup(name);
         if (names[n]) n++;
     }
-    closedir(d);
+    ps2_dir_close(d);
     if (!n) return;
     qsort(names, n, sizeof *names, str_cmp);
     if (!m->native) {
@@ -703,25 +703,25 @@ static void natives_load(mod_info *m) {
 
 static void data_files_load(mod_info *m) {
     char path[700];
-    DIR *d;
-    struct dirent *e;
+    ps2_dir *d;
+    const char *name;
     char *names[64];
     unsigned n = 0;
     snprintf(path, sizeof path, "%s/symbols.txt", m->dir);
     m->symbols = symbols_load(path, m->id);
     snprintf(path, sizeof path, "%s/params.txt", m->dir);
     m->params = (u32)ps2_params_load(path, m->priority, m->id);
-    d = opendir(m->dir);
+    d = ps2_dir_open(m->dir);
     if (!d) return;
-    while ((e = readdir(d)) != NULL && n < 64) {
-        size_t len = strlen(e->d_name);
-        if (len > 6 && (!strcmp(e->d_name + len - 6, ".pnach")
-                        || !strcmp(e->d_name + len - 6, ".PNACH"))) {
-            names[n] = strdup(e->d_name);
+    while ((name = ps2_dir_next(d)) != NULL && n < 64) {
+        size_t len = strlen(name);
+        if (len > 6 && (!strcmp(name + len - 6, ".pnach")
+                        || !strcmp(name + len - 6, ".PNACH"))) {
+            names[n] = strdup(name);
             if (names[n]) n++;
         }
     }
-    closedir(d);
+    ps2_dir_close(d);
     if (n > 1) qsort(names, n, sizeof *names, str_cmp);
     for (unsigned i = 0; i < n; i++) {
         snprintf(path, sizeof path, "%s/%s", m->dir, names[i]);

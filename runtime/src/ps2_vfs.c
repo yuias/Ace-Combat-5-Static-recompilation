@@ -9,8 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <dirent.h>
-#include <pthread.h>
+#include "ps2_os.h"
 
 #define SECTOR        PS2_VFS_SECTOR
 #define FIRST_LSN     32u
@@ -42,7 +41,7 @@ static int vfs_is_tree, vfs_opened;
 static char vfs_path[1024];
 static FILE *image_fp;
 static u32 end_lsn;
-static pthread_mutex_t vfs_lock = PTHREAD_MUTEX_INITIALIZER;
+static ps2_mutex_t vfs_lock = PS2_MUTEX_INIT;
 static u64 reads_sectors, reads_bytes, reads_from_mods;
 
 typedef enum { CL_PENDING, CL_DISC, CL_NEW, CL_PAC, CL_BAD } claim_kind;
@@ -154,7 +153,7 @@ static int host_stat(const char *path, u64 *size, int *is_dir) {
     if (stat(path, &st) != 0) return -1;
 #endif
     if (size) *size = (u64)st.st_size;
-    if (is_dir) *is_dir = S_ISDIR(st.st_mode);
+    if (is_dir) *is_dir = ((st.st_mode & _S_IFMT) == _S_IFDIR);
     return 0;
 }
 
@@ -309,7 +308,7 @@ int ps2_vfs_read_sectors(u32 lsn, u32 sectors, void *dst) {
     u8 *out = (u8 *)dst;
     u32 done = 0;
     if (!vfs_opened) return -1;
-    pthread_mutex_lock(&vfs_lock);
+    ps2_mutex_lock(&vfs_lock);
     reads_sectors += sectors;
     while (done < sectors) {
         vfs_node *n = node_at(lsn + done);
@@ -325,7 +324,7 @@ int ps2_vfs_read_sectors(u32 lsn, u32 sectors, void *dst) {
         node_read(n, (u64)in * SECTOR, run * SECTOR, out + (size_t)done * SECTOR);
         done += run;
     }
-    pthread_mutex_unlock(&vfs_lock);
+    ps2_mutex_unlock(&vfs_lock);
     return (int)sectors;
 }
 
@@ -352,10 +351,10 @@ int ps2_vfs_read(const ps2_disc_file *f, u64 pos, u32 len, void *dst) {
     if (!f || !vfs_opened) return -1;
     if (pos >= f->size) return 0;
     if (pos + len > f->size) len = (u32)((u64)f->size - pos);
-    pthread_mutex_lock(&vfs_lock);
+    ps2_mutex_lock(&vfs_lock);
     node_read(n, pos, len, (u8 *)dst);
     reads_bytes += len;
-    pthread_mutex_unlock(&vfs_lock);
+    ps2_mutex_unlock(&vfs_lock);
     return (int)len;
 }
 
@@ -436,20 +435,20 @@ static void image_scan_dir(u32 lsn, u32 size, const char *prefix, int depth) {
 }
 
 static void tree_scan(const char *hostdir, const char *prefix, int depth) {
-    DIR *d = opendir(hostdir);
-    struct dirent *e;
+    ps2_dir *d = ps2_dir_open(hostdir);
+    const char *name;
     if (!d) return;
-    while ((e = readdir(d)) != NULL) {
+    while ((name = ps2_dir_next(d)) != NULL) {
         char hp[1024], full[256];
         u64 size;
         int is_dir, hn, fn;
-        if (e->d_name[0] == '.') continue;
-        hn = snprintf(hp, sizeof hp, "%s/%s", hostdir, e->d_name);
+        if (name[0] == '.') continue;
+        hn = snprintf(hp, sizeof hp, "%s/%s", hostdir, name);
         fn = snprintf(full, sizeof full, "%s%s%s", prefix, *prefix ? "/" : "",
-                      e->d_name);
+                      name);
         if (hn < 0 || (size_t)hn >= sizeof hp || fn < 0
             || (size_t)fn >= sizeof full) {
-            ps2_log("vfs: path too long, not indexed: %s/%s", hostdir, e->d_name);
+            ps2_log("vfs: path too long, not indexed: %s/%s", hostdir, name);
             continue;
         }
         if (host_stat(hp, &size, &is_dir) != 0) continue;
@@ -466,7 +465,7 @@ static void tree_scan(const char *hostdir, const char *prefix, int depth) {
             }
         }
     }
-    closedir(d);
+    ps2_dir_close(d);
 }
 
 typedef struct {
@@ -1142,9 +1141,9 @@ static int compose_locked(u32 m, u8 **out, u32 *len) {
 
 int ps2_vfs_pac_compose(u32 member, u8 **out, u32 *len) {
     int rc;
-    pthread_mutex_lock(&vfs_lock);
+    ps2_mutex_lock(&vfs_lock);
     rc = compose_locked(member, out, len);
-    pthread_mutex_unlock(&vfs_lock);
+    ps2_mutex_unlock(&vfs_lock);
     return rc;
 }
 
@@ -1192,11 +1191,11 @@ s64 ps2_vfs_stat(const char *path) {
     u32 m, k;
     s64 size = -1;
     if (!path || norm_path(path, norm, sizeof norm) <= 0 || !vfs_opened) return -1;
-    pthread_mutex_lock(&vfs_lock);
+    ps2_mutex_lock(&vfs_lock);
     n = lookup(norm);
     if (n) size = n->f.size;
     else if (resolve_file(norm, &m, &k) == 0) size = archive_file_size(m, k);
-    pthread_mutex_unlock(&vfs_lock);
+    ps2_mutex_unlock(&vfs_lock);
     return size;
 }
 
@@ -1207,7 +1206,7 @@ s64 ps2_vfs_read_path(const char *path, u64 pos, u32 len, void *dst) {
     s64 size, got = -1;
     u8 *member;
     if (!path || norm_path(path, norm, sizeof norm) <= 0 || !vfs_opened) return -1;
-    pthread_mutex_lock(&vfs_lock);
+    ps2_mutex_lock(&vfs_lock);
     n = lookup(norm);
     if (n) {
         if (pos >= n->f.size) got = 0;
@@ -1228,7 +1227,7 @@ s64 ps2_vfs_read_path(const char *path, u64 pos, u32 len, void *dst) {
         }
         free(member);
     }
-    pthread_mutex_unlock(&vfs_lock);
+    ps2_mutex_unlock(&vfs_lock);
     return got;
 }
 

@@ -22,6 +22,7 @@ def build():
                     '-I' + str(root / 'runtime/include'),
                     str(root / 'tools/vfs_test.c'),
                     str(root / 'runtime/src/ps2_vfs.c'),
+                    str(root / 'runtime/src/ps2_os.c'),
                     '-pthread', '-o', str(exe)], check=True)
 
 
