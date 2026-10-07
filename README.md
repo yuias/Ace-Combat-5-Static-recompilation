@@ -14,7 +14,9 @@ There's no game code or assets in this repo. You bring your own copy of the game
 
 - **The game.** The US release, serial SLUS-20851, as an ISO or as the extracted disc files. The config files in `config/` are tied to addresses in the US executable, so a disc from another region doesn't work with them. The Japanese release (SLPS-25418) has its own config set and its own section further down. It boots and reaches a mission, but it hasn't been played through yet.
 - **64-bit Windows** and a GPU with a Vulkan driver. I build and play on Windows 10.
-- **Clang and SDL3** come from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and the SDL3 mingw development package. You don't install them yourself: the build script in step 4 downloads both into `deps/` (git-ignored) the first time it runs. The generated code relies on guaranteed tail calls (`musttail`), which Clang provides.
+- **LLVM clang** 19 or newer on `PATH`, from the [LLVM installer](https://github.com/llvm/llvm-project/releases), `winget install LLVM.LLVM` or scoop's `llvm`. The build uses the GNU-style `clang` driver, not `clang-cl`. The generated code relies on guaranteed tail calls (`musttail`), which Clang provides.
+- **Visual Studio 2026** (or its Build Tools) with the "Desktop development with C++" workload, for the MSVC x64 libraries and a Windows SDK. You don't need to open a developer prompt: the build script enters the Visual Studio environment itself.
+- **SDL3** you don't install yourself: the build script in step 4 downloads the SDL3 VC development package into `deps/` (git-ignored) the first time it runs. If you built this before, the old `deps/llvm-mingw-*` folder is no longer used and can be deleted.
 - **CMake** 3.20 or newer, and **Ninja** (`pip install ninja` is the easiest way to get it).
 - **The [Vulkan SDK](https://vulkan.lunarg.com)**. The build uses its `glslc` to compile the shaders.
 - **Python 3.** Only the standard library is used, there's nothing to pip install. I'm on 3.12.
@@ -85,9 +87,9 @@ If you want to actually read the output, add `--comments`. Every line then gets 
 powershell -ExecutionPolicy Bypass -File tools/build-clang.ps1
 ```
 
-On the first run this downloads llvm-mingw and SDL3 into `deps/`, then configures and builds into `build/clang`. Extra arguments are passed on to the CMake configure step, for example `-DPS2_DIAG=ON`.
+On the first run this downloads SDL3 into `deps/`, then configures and builds into `build/clang`. Extra arguments are passed on to the CMake configure step, for example `-DPS2_DIAG=ON`.
 
-The shaders get compiled into a `shaders` folder right next to `ac5.exe`, and that's where the game looks for them. If you ever move the exe somewhere else, take that folder with it. The script also copies `SDL3.dll` and `libwinpthread-1.dll` next to `ac5.exe`. `vulkan-1.dll` already comes with your graphics driver.
+The shaders get compiled into a `shaders` folder right next to `ac5.exe`, and that's where the game looks for them. If you ever move the exe somewhere else, take that folder with it. The script also copies `SDL3.dll` next to `ac5.exe`; the C runtime is linked into the exe. `vulkan-1.dll` already comes with your graphics driver.
 
 Every generated file is basically one gigantic function, so give it a few minutes. There shouldn't be any warnings.
 
@@ -278,7 +280,8 @@ The files in `config/slps-25418/` are made from these by the translation describ
 - **CMake says `Cannot find source file: .../generated/ps2_func_table.c`.** You haven't done step 3 yet, or the output went somewhere other than `generated`.
 - **CMake can't find Vulkan or `glslc`.** The Vulkan SDK isn't installed, or `VULKAN_SDK` isn't set in that terminal.
 - **CMake can't find SDL3.** `deps/` is missing or incomplete. Delete `deps/` and run the build script again.
-- **ac5.exe won't start and complains about a missing DLL.** `SDL3.dll` or `libwinpthread-1.dll` isn't next to it. Run the build script again, it copies both.
+- **The build script says clang or Visual Studio wasn't found.** Check the LLVM and Visual Studio entries under [What you need](#what-you-need). `clang` has to be on `PATH` in the terminal you run the script from, and Visual Studio needs the C++ workload.
+- **ac5.exe won't start and complains about a missing DLL.** `SDL3.dll` isn't next to it. Run the build script again, it copies it.
 - **The log says `vk: cannot open shader`.** The `shaders` folder isn't next to `ac5.exe` anymore. Put it back, or set `PS2_SHADER_DIR` to wherever the `.spv` files are.
 - **The game quits by itself with `==== WATCHDOG: the guest delivered no field for 10 seconds`.** You left out `--watchdog 0`.
 
