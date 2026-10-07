@@ -56,6 +56,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 
 set(RUNTIME_SOURCES
     runtime/src/ps2_core.c
+    runtime/src/ps2_os.c
     runtime/src/ps2_hostprof.c
     runtime/src/ps2_hw.c
     runtime/src/ps2_gfxq.c
