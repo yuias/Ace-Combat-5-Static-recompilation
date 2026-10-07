@@ -1,5 +1,25 @@
 cmake_minimum_required(VERSION 3.20)
+# Static CRT, so no Visual C++ redistributable has to sit next to ac5.exe.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 project(ps2recomp_ac5 C CXX)
+
+if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang"
+   OR NOT CMAKE_C_SIMULATE_ID STREQUAL "MSVC"
+   OR NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+  message(FATAL_ERROR "Build with tools/build-clang.ps1: clang (GNU-style "
+          "driver) targeting x86_64-pc-windows-msvc.")
+endif()
+
+# The MSVC STL runs without exceptions, matching -fno-exceptions -fno-rtti.
+add_compile_definitions(_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE
+                        $<$<COMPILE_LANGUAGE:CXX>:_HAS_EXCEPTIONS=0>)
+# NOICF: identical-code folding would merge functions whose addresses the hook
+# sleds and dispatch tables rely on.
+# DEBUG:SYMTAB: keeps a COFF symbol table without a PDB, for llvm-nm host
+# profiles (tools/host_profile.py).
+# The default thread stack stays at the lld-link default (1 MiB), the same as
+# the previous toolchain produced.
+add_link_options(-fuse-ld=lld -Wl,/OPT:NOICF -Wl,/DEBUG:SYMTAB)
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -16,10 +36,8 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O2")
 
 option(PS2_DIAG "compile the entry histogram and the guest-store watch in" OFF)
 
-find_package(Threads REQUIRED)
-
 find_package(Vulkan REQUIRED)
-# The SDL3 mingw devel package from tools/build-clang.ps1 (-DSDL3_DIR=...).
+# The SDL3 VC devel package from tools/build-clang.ps1 (-DSDL3_DIR=...).
 find_package(SDL3 CONFIG REQUIRED)
 
 set(PS2_GENERATED_DIR "generated" CACHE STRING
@@ -135,11 +153,8 @@ add_executable(ac5 ${RUNTIME_SOURCES} ${GENERATED_SOURCES})
 target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                        ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(ac5 PRIVATE Threads::Threads m
-                                  SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt)
+target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt)
 target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
-# -static-libgcc makes clang link libunwind statically, so no libunwind.dll.
-target_link_options(ac5 PRIVATE -static-libstdc++ -static-libgcc)
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
 set(GEN_COMPILE_OPTIONS "${GEN_OPT}")
@@ -184,9 +199,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             "${LUA_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                             ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(gsreplay PRIVATE Threads::Threads m
-                                       SDL3::SDL3 Vulkan::Vulkan ole32 avrt)
-target_link_options(gsreplay PRIVATE -static-libstdc++ -static-libgcc)
+target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan ole32 avrt)
 target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)
