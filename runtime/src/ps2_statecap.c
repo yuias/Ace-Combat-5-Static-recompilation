@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>
-#include <pthread.h>
+#include "ps2_os.h"
 #ifdef _WIN32
 #  include <windows.h>
 #endif
@@ -20,8 +20,8 @@ static volatile int g_busy;
 static volatile int g_gspend;
 static FILE    *g_man;
 
-static pthread_mutex_t g_mx = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_cv = PTHREAD_COND_INITIALIZER;
+static ps2_mutex_t g_mx = PS2_MUTEX_INIT;
+static ps2_cond_t   g_cv = PS2_COND_INIT;
 static int             g_armed;
 static int             g_up;
 
@@ -264,12 +264,12 @@ static void *snap_thread(void *p) {
     (void)p;
     for (;;) {
         char why[128];
-        pthread_mutex_lock(&g_mx);
-        while (!g_armed) pthread_cond_wait(&g_cv, &g_mx);
+        ps2_mutex_lock(&g_mx);
+        while (!g_armed) ps2_cond_wait(&g_cv, &g_mx);
         g_armed = 0;
         memcpy(why, g_why, sizeof why);
         why[sizeof why - 1] = 0;
-        pthread_mutex_unlock(&g_mx);
+        ps2_mutex_unlock(&g_mx);
         take(why);
         g_busy = 0;
     }
@@ -278,13 +278,13 @@ static void *snap_thread(void *p) {
 
 void ps2_statecap_request(const char *why) {
     if (!g_up) return;
-    pthread_mutex_lock(&g_mx);
-    if (g_busy) { pthread_mutex_unlock(&g_mx); return; }
+    ps2_mutex_lock(&g_mx);
+    if (g_busy) { ps2_mutex_unlock(&g_mx); return; }
     g_busy = 1;
     snprintf(g_why, sizeof g_why, "%s", why ? why : "");
     g_armed = 1;
-    pthread_cond_signal(&g_cv);
-    pthread_mutex_unlock(&g_mx);
+    ps2_cond_signal(&g_cv);
+    ps2_mutex_unlock(&g_mx);
     ps2_log("snap: requested: %s", why ? why : "");
 }
 
@@ -311,14 +311,14 @@ static void *marker_thread(void *p) {
 }
 
 void ps2_statecap_init(u8 *ram, u64 size) {
-    pthread_t th;
+    ps2_thread_t th;
     g_ram = ram; g_size = size;
     g_up = 1;
-    pthread_create(&th, NULL, snap_thread, NULL);
-    pthread_detach(th);
+    ps2_thread_create(&th, snap_thread, NULL);
+    ps2_thread_detach(th);
     if (!PS2_ENV("PS2_SNAP_NOKEY")) {
-        pthread_create(&th, NULL, marker_thread, NULL);
-        pthread_detach(th);
+        ps2_thread_create(&th, marker_thread, NULL);
+        ps2_thread_detach(th);
     }
     ps2_log("snap: armed: press F8 in the game window (or drop snap.on) for a "
             "full state snapshot into out/snap_NNN/");

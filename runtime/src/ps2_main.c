@@ -16,8 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <pthread.h>
-#include <unistd.h>
+#include "ps2_os.h"
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -123,7 +122,7 @@ static void *watchdog_main(void *arg) {
     if (watchdog_seconds == 0) return NULL;
     while (watchdog_armed) {
         u64 now;
-        sleep(1);
+        ps2_sleep_ms(1000);
         now = ps2_kernel_vblank_count();
         if (now != last) { last = now; quiet = 0; continue; }
         if (++quiet < watchdog_seconds) continue;
@@ -148,7 +147,7 @@ void ps2_finish(const char *why) {
     static volatile int finishing;
     u64 prims, pixels, regs, vf, vd, vv, vt;
     if (__atomic_test_and_set(&finishing, __ATOMIC_SEQ_CST)) {
-        for (;;) sleep(1);
+        for (;;) ps2_sleep_ms(1000);
     }
     u32 vu_unknown;
     watchdog_armed = 0;
@@ -256,9 +255,7 @@ int ps2_time_up(void) { return time_budget_expired; }
 
 static void *time_budget_main(void *arg) {
     (void)arg;
-    struct timespec ts = { (time_t)time_budget,
-                           (long)((time_budget - (double)(time_t)time_budget) * 1e9) };
-    nanosleep(&ts, NULL);
+    ps2_sleep_ms((unsigned)(time_budget * 1000.0 + 0.999));
     time_budget_expired = 1;
     return NULL;
 }
@@ -709,15 +706,15 @@ int main(int argc, char **argv) {
     ps2_cpu.cop0[12] = 0x70000000u;
 
     {
-        pthread_t wd;
-        pthread_create(&wd, NULL, watchdog_main, NULL);
-        pthread_detach(wd);
+        ps2_thread_t wd;
+        ps2_thread_create(&wd, watchdog_main, NULL);
+        ps2_thread_detach(wd);
     }
 
     if (time_budget > 0) {
-        pthread_t tb;
-        pthread_create(&tb, NULL, time_budget_main, NULL);
-        pthread_detach(tb);
+        ps2_thread_t tb;
+        ps2_thread_create(&tb, time_budget_main, NULL);
+        ps2_thread_detach(tb);
     }
 
     t0 = clock();

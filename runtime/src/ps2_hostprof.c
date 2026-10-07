@@ -7,7 +7,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <pthread.h>
+#include "ps2_os.h"
 
 #define HP_BITS 16
 #define HP_N (1u << HP_BITS)
@@ -15,7 +15,7 @@ static struct { u64 rip, n; } hp_tab[HP_N];
 static u64 hp_total, hp_dropped;
 static HANDLE hp_target;
 static volatile int hp_running;
-static pthread_t hp_thread;
+static ps2_thread_t hp_thread;
 static char hp_who[32];
 
 static void hp_record(u64 rip) {
@@ -63,7 +63,7 @@ void ps2_host_prof_attach(const char *who) {
     }
     snprintf(hp_who, sizeof hp_who, "%s", who);
     hp_running = 1;
-    if (pthread_create(&hp_thread, NULL, hp_main, NULL) != 0) {
+    if (ps2_thread_create(&hp_thread, hp_main, NULL) != 0) {
         hp_running = 0;
         CloseHandle(hp_target);
         return;
@@ -77,7 +77,7 @@ void ps2_host_prof_report(void) {
     FILE *f;
     if (!hp_running) return;
     hp_running = 0;
-    pthread_join(hp_thread, NULL);
+    ps2_thread_join(hp_thread);
     CloseHandle(hp_target);
     if (!path || !*path) path = "out/host_profile.txt";
     f = fopen(path, "w");

@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
-#include <pthread.h>
+#include "ps2_os.h"
 #include <stdint.h>
 #include <sys/stat.h>
 #ifdef _WIN32
@@ -179,10 +179,10 @@ static u8   *g_free[CAP_BUFS];
 static int   g_nfree;
 static struct { u8 *p; size_t n; } g_full[CAP_BUFS];
 static int   g_nfull;
-static pthread_mutex_t g_m = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_cv_full = PTHREAD_COND_INITIALIZER;
-static pthread_cond_t  g_cv_free = PTHREAD_COND_INITIALIZER;
-static pthread_t g_writer;
+static ps2_mutex_t g_m = PS2_MUTEX_INIT;
+static ps2_cond_t   g_cv_full = PS2_COND_INIT;
+static ps2_cond_t   g_cv_free = PS2_COND_INIT;
+static ps2_thread_t g_writer;
 static int   g_writer_live;
 static int   g_writer_stop;
 static u64   g_stall_blocks;
@@ -196,23 +196,23 @@ static void *cap_writer_main(void *arg) {
     for (;;) {
         u8 *p = NULL;
         size_t n = 0;
-        pthread_mutex_lock(&g_m);
+        ps2_mutex_lock(&g_m);
         while (!g_nfull && !g_writer_stop)
-            pthread_cond_wait(&g_cv_full, &g_m);
+            ps2_cond_wait(&g_cv_full, &g_m);
         if (g_nfull) {
             p = g_full[0].p;
             n = g_full[0].n;
             memmove(g_full, g_full + 1, sizeof(g_full[0]) * (size_t)(--g_nfull));
         } else {
-            pthread_mutex_unlock(&g_m);
+            ps2_mutex_unlock(&g_m);
             break;
         }
-        pthread_mutex_unlock(&g_m);
+        ps2_mutex_unlock(&g_m);
         if (g_cf && n) fwrite(p, 1, n, g_cf);
-        pthread_mutex_lock(&g_m);
+        ps2_mutex_lock(&g_m);
         g_free[g_nfree++] = p;
-        pthread_cond_signal(&g_cv_free);
-        pthread_mutex_unlock(&g_m);
+        ps2_cond_signal(&g_cv_free);
+        ps2_mutex_unlock(&g_m);
     }
     return NULL;
 }
@@ -225,20 +225,20 @@ static void cap_flush_buffer(void) {
         g_run_pos = CAP_NORUN;
         return;
     }
-    pthread_mutex_lock(&g_m);
+    ps2_mutex_lock(&g_m);
     if (g_buf_n) {
         g_full[g_nfull].p = g_buf;
         g_full[g_nfull].n = g_buf_n;
         g_nfull++;
-        pthread_cond_signal(&g_cv_full);
+        ps2_cond_signal(&g_cv_full);
         g_buf = NULL;
         while (!g_nfree) {
             g_stall_blocks++;
-            pthread_cond_wait(&g_cv_free, &g_m);
+            ps2_cond_wait(&g_cv_free, &g_m);
         }
         g_buf = g_free[--g_nfree];
     }
-    pthread_mutex_unlock(&g_m);
+    ps2_mutex_unlock(&g_m);
     g_buf_n = 0;
     g_run_pos = CAP_NORUN;
 }
@@ -246,11 +246,11 @@ static void cap_flush_buffer(void) {
 static void cap_writer_join(void) {
     if (!g_writer_live) return;
     cap_flush_buffer();
-    pthread_mutex_lock(&g_m);
+    ps2_mutex_lock(&g_m);
     g_writer_stop = 1;
-    pthread_cond_broadcast(&g_cv_full);
-    pthread_mutex_unlock(&g_m);
-    pthread_join(g_writer, NULL);
+    ps2_cond_broadcast(&g_cv_full);
+    ps2_mutex_unlock(&g_m);
+    ps2_thread_join(g_writer);
     g_writer_live = 0;
     g_writer_stop = 0;
 }
@@ -489,12 +489,12 @@ void ps2_cap_stop(const char *why) {
     ps2_cap_dict_reset();
     {
         int i;
-        pthread_mutex_lock(&g_m);
+        ps2_mutex_lock(&g_m);
         for (i = 0; i < g_nfree; i++) free(g_free[i]);
         g_nfree = 0;
         for (i = 0; i < g_nfull; i++) free(g_full[i].p);
         g_nfull = 0;
-        pthread_mutex_unlock(&g_m);
+        ps2_mutex_unlock(&g_m);
         free(g_buf);
         g_buf = NULL;
     }
@@ -720,7 +720,7 @@ void ps2_cap_maybe_start(void) {
     g_buf_n = 0;
     g_run_pos = CAP_NORUN;
     g_writer_stop = 0;
-    g_writer_live = pthread_create(&g_writer, NULL, cap_writer_main, NULL) == 0;
+    g_writer_live = ps2_thread_create(&g_writer, cap_writer_main, NULL) == 0;
     if (!g_writer_live)
         ps2_log("cap: no writer thread; the guest will do the I/O itself");
 

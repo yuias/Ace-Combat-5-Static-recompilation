@@ -1,7 +1,7 @@
 #include "ps2_runtime.h"
 #include "ps2_hle.h"
 #include "ps2_modapi.h"
-#include <pthread.h>
+#include "ps2_os.h"
 
 u64 ps2_kernel_vblank_count(void);
 #include <stdio.h>
@@ -24,7 +24,7 @@ ps2_pad_state ps2_pad_host[PS2_PAD_PORTS];
 
 static ps2_pad_state pad_poll[PS2_PAD_PORTS];
 static u16 pad_seen[PS2_PAD_PORTS];
-static pthread_mutex_t pad_lock = PTHREAD_MUTEX_INITIALIZER;
+static ps2_mutex_t pad_lock = PS2_MUTEX_INIT;
 static u64 pad_latches;
 
 enum { PAD_PATH_BOTH = 0, PAD_PATH_LIBPAD2, PAD_PATH_DBC };
@@ -45,10 +45,10 @@ static int pad_path(void) {
 
 void ps2_pad_publish(int port, const ps2_pad_state *st) {
     if (port < 0 || port >= PS2_PAD_PORTS) return;
-    pthread_mutex_lock(&pad_lock);
+    ps2_mutex_lock(&pad_lock);
     pad_poll[port] = *st;
     pad_seen[port] |= st->buttons;
-    pthread_mutex_unlock(&pad_lock);
+    ps2_mutex_unlock(&pad_lock);
 }
 
 static FILE *pad_rec_fp;
@@ -121,14 +121,14 @@ void ps2_pad_io_report(void) {
 
 void ps2_pad_latch(void) {
     int i;
-    pthread_mutex_lock(&pad_lock);
+    ps2_mutex_lock(&pad_lock);
     for (i = 0; i < PS2_PAD_PORTS; i++) {
         ps2_pad_host[i] = pad_poll[i];
         ps2_pad_host[i].buttons |= pad_seen[i];
         pad_seen[i] = pad_poll[i].buttons;
     }
     pad_latches++;
-    pthread_mutex_unlock(&pad_lock);
+    ps2_mutex_unlock(&pad_lock);
     if (!pad_io_ready) pad_io_init();
     if (pad_play_buf && pad_play_used < pad_play_n) {
         memcpy(ps2_pad_host,
