@@ -17,13 +17,14 @@ tree = Path(paths.DISC)
 iso = Path(str(tree) + '.iso')
 names = Path(paths.region_config('pac_names.txt'))
 
-subprocess.run([toolchain.cc(), '-std=gnu2x', '-O2', '-fno-strict-aliasing', '-fwrapv',
+subprocess.run([toolchain.cc(), *toolchain.target_flags(),
+                '-std=gnu2x', '-O2', '-fno-strict-aliasing', '-fwrapv',
                 '-Wall', '-Wextra', '-Wno-unused-parameter',
                 '-I' + str(root / 'runtime/include'),
                 str(root / 'tools/vfs_test.c'),
                 str(root / 'runtime/src/ps2_vfs.c'),
                 str(root / 'runtime/src/ps2_os.c'),
-                '-pthread', '-o', str(exe)], check=True)
+                '-o', str(exe)], check=True)
 
 env = dict(os.environ, PS2_MOD_NAMES=str(names))
 

@@ -121,10 +121,10 @@ int main(void) {
 }
 '''
 (out/'collision_probe.c').write_text(harness)
-cmd = [toolchain.cc(),'-std=gnu2x','-O1','-ffunction-sections','-fdata-sections',
+cmd = [toolchain.cc(),*toolchain.target_flags(),'-std=gnu2x','-O1','-ffunction-sections','-fdata-sections',
        '-fno-strict-aliasing','-fwrapv',
        '-I'+str(root/'runtime/include'),str(out/'collision_probe.c'),
-       str(root/'runtime/src/ps2_core.c'),str(root/'runtime/src/ps2_os.c'),'-Wl,--gc-sections','-lm',
+       str(root/'runtime/src/ps2_core.c'),str(root/'runtime/src/ps2_os.c'),'-Wl,/OPT:REF',
        '-o',str(out/'collision_probe.exe')]
 subprocess.run(cmd,check=True)
 subprocess.run([str(out/'collision_probe.exe')],check=True)

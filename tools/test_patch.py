@@ -10,7 +10,8 @@ out = root / 'out' / 'patch_test'
 out.mkdir(parents=True, exist_ok=True)
 exe = out / 'patch_test.exe'
 
-subprocess.run([toolchain.cc(), '-std=gnu2x', '-O1', '-fno-strict-aliasing', '-fwrapv',
+subprocess.run([toolchain.cc(), *toolchain.target_flags(),
+                '-std=gnu2x', '-O1', '-fno-strict-aliasing', '-fwrapv',
                 '-Wall', '-Wextra', '-Wno-unused-parameter',
                 '-I' + str(root / 'runtime/include'),
                 str(root / 'tools/patch_test.c'),
