@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include "ps2_os.h"
 #include <time.h>
 
 void ps2_vif_transfer(int which, const ps2_reg128 *q, u32 qwc);
@@ -38,12 +38,12 @@ static size_t q_cap;
 static size_t q_head, q_tail;
 static int q_busy;
 static int q_running;
-static pthread_t q_thread;
+static ps2_thread_t q_thread;
 static _Thread_local int q_is_worker;
-static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t q_not_empty = PTHREAD_COND_INITIALIZER;
-static pthread_cond_t q_not_full  = PTHREAD_COND_INITIALIZER;
-static pthread_cond_t q_idle      = PTHREAD_COND_INITIALIZER;
+static ps2_mutex_t q_lock = PS2_MUTEX_INIT;
+static ps2_cond_t q_not_empty = PS2_COND_INIT;
+static ps2_cond_t q_not_full  = PS2_COND_INIT;
+static ps2_cond_t q_idle      = PS2_COND_INIT;
 
 static u64 st_records, st_bytes, st_producer_waits, st_drains, st_drain_waits;
 static size_t st_peak_fill;
@@ -53,9 +53,7 @@ static u64 st_field_waits;
 static u64 st_field_wait_ns;
 
 static u64 gq_now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+    return ps2_mono_ns();
 }
 static u64 st_producer_ns, st_drain_ns;
 
@@ -84,21 +82,21 @@ void ps2_speed_sample(u64 fields, u64 dropped) {
         prev_ns = now; prev_fields = fields; prev_dropped = dropped;
         prev_field_wait=st_field_wait_ns; prev_ring_wait=st_producer_ns;
         prev_drain=st_drain_ns; prev_bytes=st_bytes;
-        pthread_mutex_lock(&q_lock);
+        ps2_mutex_lock(&q_lock);
         prev_present=speed_present_ns; prev_n=speed_present_n; prev_work=speed_work_ns;
         prev_vu_runs=speed_vu_runs; prev_vu_insns=speed_vu_insns; prev_vu_guards=speed_vu_guards;
-        pthread_mutex_unlock(&q_lock);
+        ps2_mutex_unlock(&q_lock);
         ps2_scene_speed_report(0);
         return;
     }
     if (now - prev_ns < 5000000000ull) return;
     double dt = (now - prev_ns) / 1e9;
-    pthread_mutex_lock(&q_lock);
+    ps2_mutex_lock(&q_lock);
     u64 pn = speed_present_n, pt = speed_present_ns, work = speed_work_ns;
     u64 vr=speed_vu_runs, vi=speed_vu_insns, vg=speed_vu_guards;
     size_t fill = q_head - q_tail;
     int pending = q_fields_pending;
-    pthread_mutex_unlock(&q_lock);
+    ps2_mutex_unlock(&q_lock);
     ps2_log("speed: dt=%.2fs fields=%.2f/s dropped=%llu gfxq=%d pending=%d ring_KB=%zu queued_MB=%.2f",
         dt, (fields-prev_fields)/dt, (unsigned long long)(dropped-prev_dropped),
         ps2_gfxq_on, pending, fill >> 10, (st_bytes-prev_bytes)/1048576.0);
@@ -121,16 +119,16 @@ static u8 *q_reserve(u32 n) {
     size_t pad = off + n > q_cap ? q_cap - off : 0;
     size_t need = pad + n;
     if (q_cap - (q_head - q_producer_tail) < need) {
-        pthread_mutex_lock(&q_lock);
+        ps2_mutex_lock(&q_lock);
         q_producer_tail = q_tail;
         while (q_cap - (q_head - q_producer_tail) < need) {
             u64 t0 = gq_now_ns();
             st_producer_waits++;
-            pthread_cond_wait(&q_not_full, &q_lock);
+            ps2_cond_wait(&q_not_full, &q_lock);
             st_producer_ns += gq_now_ns() - t0;
             q_producer_tail = q_tail;
         }
-        pthread_mutex_unlock(&q_lock);
+        ps2_mutex_unlock(&q_lock);
     }
     q_reserved_end = q_head + need;
     if (pad) {
@@ -148,9 +146,9 @@ static void q_commit(u32 n) {
     fill = q_reserved_end - __atomic_load_n(&q_tail, __ATOMIC_RELAXED);
     if (fill > st_peak_fill) st_peak_fill = fill;
     if (!__atomic_load_n(&q_busy, __ATOMIC_SEQ_CST)) {
-        pthread_mutex_lock(&q_lock);
-        pthread_cond_signal(&q_not_empty);
-        pthread_mutex_unlock(&q_lock);
+        ps2_mutex_lock(&q_lock);
+        ps2_cond_signal(&q_not_empty);
+        ps2_mutex_unlock(&q_lock);
     }
 }
 
@@ -200,14 +198,14 @@ static void *q_main(void *unused) {
     ps2_host_prof_attach("gfx");
     u64 speed_burst=0;
     int speed_on=ps2_speed_enabled();
-    pthread_mutex_lock(&q_lock);
+    ps2_mutex_lock(&q_lock);
     for (;;) {
         while (q_running && __atomic_load_n(&q_head, __ATOMIC_SEQ_CST) == q_tail) {
             if (speed_burst) { speed_work_ns += gq_now_ns()-speed_burst; speed_burst=0; }
             __atomic_store_n(&q_busy, 0, __ATOMIC_SEQ_CST);
-            pthread_cond_broadcast(&q_idle);
+            ps2_cond_broadcast(&q_idle);
             if (__atomic_load_n(&q_head, __ATOMIC_SEQ_CST) != q_tail) break;
-            pthread_cond_wait(&q_not_empty, &q_lock);
+            ps2_cond_wait(&q_not_empty, &q_lock);
         }
         if (!q_running && __atomic_load_n(&q_head, __ATOMIC_SEQ_CST) == q_tail) break;
         __atomic_store_n(&q_busy, 1, __ATOMIC_SEQ_CST);
@@ -216,7 +214,7 @@ static void *q_main(void *unused) {
         unsigned records = 0;
         int field = 0, corrupt = 0;
         u64 speed_elapsed = 0;
-        pthread_mutex_unlock(&q_lock);
+        ps2_mutex_unlock(&q_lock);
         while (tail != head && records < 256) {
             const u8 *r = q_buf + (tail & (q_cap - 1));
             if (*r == GQ_WRAP) {
@@ -235,7 +233,7 @@ static void *q_main(void *unused) {
             records++;
             if (field) break;
         }
-        pthread_mutex_lock(&q_lock);
+        ps2_mutex_lock(&q_lock);
         __atomic_store_n(&q_tail, tail, __ATOMIC_RELEASE);
         if (field && !corrupt) {
             if (speed_on) {
@@ -245,12 +243,12 @@ static void *q_main(void *unused) {
             if (speed_burst) { u64 now=gq_now_ns(); speed_work_ns+=now-speed_burst; speed_burst=now; }
             q_fields_pending--;
         }
-        pthread_cond_broadcast(&q_not_full);
+        ps2_cond_broadcast(&q_not_full);
         if (corrupt) { q_running = 0; break; }
     }
     __atomic_store_n(&q_busy, 0, __ATOMIC_SEQ_CST);
-    pthread_cond_broadcast(&q_idle);
-    pthread_mutex_unlock(&q_lock);
+    ps2_cond_broadcast(&q_idle);
+    ps2_mutex_unlock(&q_lock);
     return NULL;
 }
 
@@ -287,7 +285,7 @@ void ps2_gfxq_init(void) {
     }
     q_head = q_tail = q_producer_tail = q_reserved_end = 0;
     q_running = 1;
-    if (pthread_create(&q_thread, NULL, q_main, NULL) != 0) {
+    if (ps2_thread_create(&q_thread, q_main, NULL) != 0) {
         ps2_log("gfxq: cannot start the worker thread; staying synchronous");
         free(q_buf); q_buf = NULL; q_running = 0;
         return;
@@ -301,26 +299,26 @@ void ps2_gfxq_drain(void) {
     u64 t0;
     if (!ps2_gfxq_on || q_is_worker) return;
     t0 = gq_now_ns();
-    pthread_mutex_lock(&q_lock);
+    ps2_mutex_lock(&q_lock);
     st_drains++;
     if (q_head != q_tail || q_busy || q_fields_pending) {
         st_drain_waits++;
-        pthread_cond_signal(&q_not_empty);
+        ps2_cond_signal(&q_not_empty);
         while (q_running && (q_head != q_tail || q_busy || q_fields_pending))
-            pthread_cond_wait(&q_idle, &q_lock);
+            ps2_cond_wait(&q_idle, &q_lock);
     }
-    pthread_mutex_unlock(&q_lock);
+    ps2_mutex_unlock(&q_lock);
     st_drain_ns += gq_now_ns() - t0;
 }
 
 void ps2_gfxq_shutdown(void) {
     if (!ps2_gfxq_on) return;
     ps2_gfxq_drain();
-    pthread_mutex_lock(&q_lock);
+    ps2_mutex_lock(&q_lock);
     q_running = 0;
-    pthread_cond_broadcast(&q_not_empty);
-    pthread_mutex_unlock(&q_lock);
-    pthread_join(q_thread, NULL);
+    ps2_cond_broadcast(&q_not_empty);
+    ps2_mutex_unlock(&q_lock);
+    ps2_thread_join(q_thread);
     ps2_gfxq_on = 0;
 }
 
@@ -415,16 +413,16 @@ int ps2_gfxq_field(void) {
         }
         return result;
     }
-    pthread_mutex_lock(&q_lock);
+    ps2_mutex_lock(&q_lock);
     if (q_fields_pending >= q_field_depth) {
         u64 t0 = gq_now_ns();
         st_field_waits++;
         while (q_running && q_fields_pending >= q_field_depth)
-            pthread_cond_wait(&q_not_full, &q_lock);
+            ps2_cond_wait(&q_not_full, &q_lock);
         st_field_wait_ns += gq_now_ns() - t0;
     }
     q_fields_pending++;
-    pthread_mutex_unlock(&q_lock);
+    ps2_mutex_unlock(&q_lock);
     { u8 *r = q_reserve(1);
       put8(r, 0, GQ_FIELD);
       q_commit(1); }

@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include "ps2_os.h"
 #include <errno.h>
 #include <time.h>
 
@@ -106,9 +106,9 @@ static void tex_index_add(u32 i) {
 }
 static size_t tex_bytes;
 
-static pthread_mutex_t list_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t gpu_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  list_cv = PTHREAD_COND_INITIALIZER;
+static ps2_mutex_t list_lock = PS2_MUTEX_INIT;
+static ps2_mutex_t gpu_lock = PS2_MUTEX_INIT;
+static ps2_cond_t  list_cv = PS2_COND_INIT;
 static int frame_requested, frame_done = 1, renderer_running;
 int ps2_vk_lockstep;
 static volatile int window_closed;
@@ -4199,13 +4199,13 @@ static void poll_input(void) {
 
 static int take_pending_frame(void) {
     int got;
-    pthread_mutex_lock(&list_lock);
+    ps2_mutex_lock(&list_lock);
     got = frame_requested;
     if (got) {
         frame_requested = 0;
-        pthread_cond_broadcast(&list_cv);
+        ps2_cond_broadcast(&list_cv);
     }
-    pthread_mutex_unlock(&list_lock);
+    ps2_mutex_unlock(&list_lock);
     return got;
 }
 
@@ -4241,9 +4241,7 @@ static double fps_limit_hz;
 static double present_credit;
 
 static u64 vk_mono_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+    return ps2_mono_ns();
 }
 
 static int fps_cap_env;
@@ -4346,14 +4344,14 @@ static u32 choose_scale(u32 need_w, u32 need_h) {
 static void replay_frame_inner(void);
 static void replay_frame(void) {
     PS2_PHASE_BEGIN(PS2_PH_PRESENT);
-    pthread_mutex_lock(&gpu_lock);
+    ps2_mutex_lock(&gpu_lock);
     replay_frame_inner();
-    pthread_mutex_unlock(&gpu_lock);
+    ps2_mutex_unlock(&gpu_lock);
     PS2_PHASE_END(PS2_PH_PRESENT);
-    pthread_mutex_lock(&list_lock);
+    ps2_mutex_lock(&list_lock);
     frame_done = 1;
-    pthread_cond_broadcast(&list_cv);
-    pthread_mutex_unlock(&list_lock);
+    ps2_cond_broadcast(&list_cv);
+    ps2_mutex_unlock(&list_lock);
 }
 static void replay_frame_inner(void) {
     apply_sampler_settings();
@@ -4549,10 +4547,10 @@ static void *renderer_main(void *arg) {
     render_tid = SDL_GetCurrentThreadID();
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         ps2_log("vk: SDL_Init: %s", SDL_GetError());
-        pthread_mutex_lock(&list_lock);
+        ps2_mutex_lock(&list_lock);
         renderer_running = -1;
-        pthread_cond_broadcast(&list_cv);
-        pthread_mutex_unlock(&list_lock);
+        ps2_cond_broadcast(&list_cv);
+        ps2_mutex_unlock(&list_lock);
         return NULL;
     }
     window = SDL_CreateWindow((const char *)arg ? (const char *)arg
@@ -4562,19 +4560,19 @@ static void *renderer_main(void *arg) {
                               | (window_hidden ? SDL_WINDOW_HIDDEN : 0));
     if (!window) {
         ps2_log("vk: SDL_CreateWindow: %s", SDL_GetError());
-        pthread_mutex_lock(&list_lock);
+        ps2_mutex_lock(&list_lock);
         renderer_running = -1;
-        pthread_cond_broadcast(&list_cv);
-        pthread_mutex_unlock(&list_lock);
+        ps2_cond_broadcast(&list_cv);
+        ps2_mutex_unlock(&list_lock);
         return NULL;
     }
     if (vk_init() != 0) {
         ps2_log("vk: initialisation failed; falling back to the software "
                 "rasteriser");
-        pthread_mutex_lock(&list_lock);
+        ps2_mutex_lock(&list_lock);
         renderer_running = -1;
-        pthread_cond_broadcast(&list_cv);
-        pthread_mutex_unlock(&list_lock);
+        ps2_cond_broadcast(&list_cv);
+        ps2_mutex_unlock(&list_lock);
         return NULL;
     }
     vk_ready = 1;
@@ -4605,25 +4603,21 @@ static void *renderer_main(void *arg) {
             SDL_free(ids);
         }
     }
-    pthread_mutex_lock(&list_lock);
+    ps2_mutex_lock(&list_lock);
     renderer_running = 1;
-    pthread_cond_broadcast(&list_cv);
-    pthread_mutex_unlock(&list_lock);
+    ps2_cond_broadcast(&list_cv);
+    ps2_mutex_unlock(&list_lock);
 
     for (;;) {
-        struct timespec ts;
         pump_events();
         if (pipe_warm_n) pipe_warm_step(4000000ull);
         else if (npipes > pipe_saved_n && vk_mono_ns() - pipe_saved_ns > 20000000000ull)
             pipe_cache_save(0);
-        pthread_mutex_lock(&list_lock);
-        if (renderer_running <= 0) { pthread_mutex_unlock(&list_lock); break; }
+        ps2_mutex_lock(&list_lock);
+        if (renderer_running <= 0) { ps2_mutex_unlock(&list_lock); break; }
         if (!frame_requested) {
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += 4 * 1000 * 1000;
-            if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-            pthread_cond_timedwait(&list_cv, &list_lock, &ts);
-            if (!frame_requested) { pthread_mutex_unlock(&list_lock); continue; }
+            ps2_cond_wait_ms(&list_cv, &list_lock, 4);
+            if (!frame_requested) { ps2_mutex_unlock(&list_lock); continue; }
         }
         rep_verts  = pub_verts;
         rep_draws  = pub_draws;
@@ -4631,8 +4625,8 @@ static void *renderer_main(void *arg) {
         rep_ndraws = pub_ndraws;
         rep_mesh   = pub_mesh;
         frame_requested = 0;
-        pthread_cond_broadcast(&list_cv);
-        pthread_mutex_unlock(&list_lock);
+        ps2_cond_broadcast(&list_cv);
+        ps2_mutex_unlock(&list_lock);
         field_skip_present = !field_present_due();
         replay_frame();
         if (!field_skip_present) fps_cap_last = vk_mono_ns();
@@ -4641,15 +4635,15 @@ static void *renderer_main(void *arg) {
     }
     SDL_RemoveEventWatch(modal_redraw_watch, NULL);
     if (ps2_settings_save_pending()) ps2_settings_save();
-    pthread_mutex_lock(&gpu_lock);
+    ps2_mutex_lock(&gpu_lock);
     if (dev) vkDeviceWaitIdle(dev);
     pipe_cache_save(1);
     ps2_ui_shutdown();
-    pthread_mutex_unlock(&gpu_lock);
+    ps2_mutex_unlock(&gpu_lock);
     return NULL;
 }
 
-static pthread_t renderer_thread;
+static ps2_thread_t renderer_thread;
 
 int ps2_video_init(const char *title, int width, int height) {
     { const char *o = getenv("PS2_DEBUG_SOLID");
@@ -4691,12 +4685,12 @@ int ps2_video_init(const char *title, int width, int height) {
             ps2_log("vk: lockstep present -- fields are waited for, never dropped");
         }
     }
-    if (pthread_create(&renderer_thread, NULL, renderer_main, window_title) != 0)
+    if (ps2_thread_create(&renderer_thread, renderer_main, window_title) != 0)
         return -1;
-    pthread_mutex_lock(&list_lock);
+    ps2_mutex_lock(&list_lock);
     while (renderer_running == 0)
-        pthread_cond_wait(&list_cv, &list_lock);
-    pthread_mutex_unlock(&list_lock);
+        ps2_cond_wait(&list_cv, &list_lock);
+    ps2_mutex_unlock(&list_lock);
     return renderer_running > 0 ? 0 : -1;
 }
 
@@ -5264,10 +5258,10 @@ int ps2_vk_present(u32 disp_x, u32 disp_y, u32 disp_w, u32 disp_h, u32 rt) {
         shot_calls++;
     }
 
-    pthread_mutex_lock(&list_lock);
+    ps2_mutex_lock(&list_lock);
     if (frame_requested && renderer_running > 0 && ps2_vk_lockstep) {
         while (frame_requested && renderer_running > 0 && !window_closed)
-            pthread_cond_wait(&list_cv, &list_lock);
+            ps2_cond_wait(&list_cv, &list_lock);
     }
     replace = frame_requested && renderer_running > 0;
     if (replace) {
@@ -5325,12 +5319,12 @@ int ps2_vk_present(u32 disp_x, u32 disp_y, u32 disp_w, u32 disp_h, u32 rt) {
     if (!replace) tex_rec_seq++;
     frame_requested = 1;
     frame_done = 0;
-    pthread_cond_broadcast(&list_cv);
+    ps2_cond_broadcast(&list_cv);
     if (ps2_vk_lockstep) {
         while (!frame_done && renderer_running > 0 && !window_closed)
-            pthread_cond_wait(&list_cv, &list_lock);
+            ps2_cond_wait(&list_cv, &list_lock);
     }
-    pthread_mutex_unlock(&list_lock);
+    ps2_mutex_unlock(&list_lock);
     if (rec_overflow) {
         ps2_log("vk: display list overflowed (%u verts / %u draws); "
                 "the frame was truncated", VK_MAX_VERTS, VK_MAX_DRAWS);
@@ -5528,13 +5522,13 @@ void ps2_vk_statecap(const char *dir) {
     FILE *f;
 
     if (!vk_ready) return;
-    pthread_mutex_lock(&list_lock);
+    ps2_mutex_lock(&list_lock);
     while (!frame_done && renderer_running > 0 && !window_closed)
-        pthread_cond_wait(&list_cv, &list_lock);
-    pthread_mutex_lock(&gpu_lock);
+        ps2_cond_wait(&list_cv, &list_lock);
+    ps2_mutex_lock(&gpu_lock);
     if (readback_targets(1) != 0) {
-        pthread_mutex_unlock(&gpu_lock);
-        pthread_mutex_unlock(&list_lock);
+        ps2_mutex_unlock(&gpu_lock);
+        ps2_mutex_unlock(&list_lock);
         return;
     }
 
@@ -5580,8 +5574,8 @@ void ps2_vk_statecap(const char *dir) {
             fclose(f);
         }
     }
-    pthread_mutex_unlock(&gpu_lock);
-    pthread_mutex_unlock(&list_lock);
+    ps2_mutex_unlock(&gpu_lock);
+    ps2_mutex_unlock(&list_lock);
 }
 
 static VkBuffer ovr_buf;
@@ -5647,8 +5641,8 @@ int ps2_vk_screenshot(const char *path) {
     const u8 *px = (const u8 *)read_ptr;
     u32 x, y, w, h, ox, oy;
     if (!vk_ready) return -1;
-    pthread_mutex_lock(&list_lock);
-    pthread_mutex_lock(&gpu_lock);
+    ps2_mutex_lock(&list_lock);
+    ps2_mutex_lock(&gpu_lock);
     if (ov_presented && !getenv("PS2_SHOT_NO_OVERLAY") && readback_overlay() == 0) {
         u32 k = ov_k, iw = ov_cw * k;
         u32 pw = present_w * k, ph = present_h * k;
@@ -5667,13 +5661,13 @@ int ps2_vk_screenshot(const char *path) {
             ps2_log("vk: frame written to %s (%ux%u, with the 2D overlay at %ux)",
                     path, w, h, k);
         }
-        pthread_mutex_unlock(&gpu_lock);
-        pthread_mutex_unlock(&list_lock);
+        ps2_mutex_unlock(&gpu_lock);
+        ps2_mutex_unlock(&list_lock);
         return fp ? 0 : -1;
     }
     if (readback_targets(getenv("PS2_DUMP_RTS") != NULL) != 0) {
-        pthread_mutex_unlock(&gpu_lock);
-        pthread_mutex_unlock(&list_lock);
+        ps2_mutex_unlock(&gpu_lock);
+        ps2_mutex_unlock(&list_lock);
         return -1;
     }
     if (swap_ptr && swap_w && getenv("PS2_DUMP_SWAP")) {
@@ -5735,8 +5729,8 @@ int ps2_vk_screenshot(const char *path) {
     }
     fp = fopen(path, "wb");
     if (!fp) {
-        pthread_mutex_unlock(&gpu_lock);
-        pthread_mutex_unlock(&list_lock);
+        ps2_mutex_unlock(&gpu_lock);
+        ps2_mutex_unlock(&list_lock);
         return -1;
     }
     fprintf(fp, "P6\n%u %u\n255\n", w, h);
@@ -5750,17 +5744,17 @@ int ps2_vk_screenshot(const char *path) {
     }
     fclose(fp);
     ps2_log("vk: frame written to %s (%ux%u)", path, w, h);
-    pthread_mutex_unlock(&gpu_lock);
-    pthread_mutex_unlock(&list_lock);
+    ps2_mutex_unlock(&gpu_lock);
+    ps2_mutex_unlock(&list_lock);
     return 0;
 }
 
 void ps2_video_shutdown(void) {
     if (!renderer_running) return;
-    pthread_mutex_lock(&list_lock);
+    ps2_mutex_lock(&list_lock);
     renderer_running = -1;
-    pthread_cond_broadcast(&list_cv);
-    pthread_mutex_unlock(&list_lock);
-    pthread_join(renderer_thread, NULL);
+    ps2_cond_broadcast(&list_cv);
+    ps2_mutex_unlock(&list_lock);
+    ps2_thread_join(renderer_thread);
     if (dev) vkDeviceWaitIdle(dev);
 }
