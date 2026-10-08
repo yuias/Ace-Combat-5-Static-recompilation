@@ -613,7 +613,11 @@ int main(int argc, char **argv) {
         rc |= ps2_nusndstr_address_selftest();
         rc |= ps2_nusndstr_fx_send_selftest();
         rc |= ps2_nusound_packet_selftest();
-        if (disc) rc |= ps2_nustream_file_selftest(disc);
+        /* The file test reads RADIOEE.PAC at offsets taken from the US disc; the JP
+           disc has RADIOJE.PAC and RADIOJJ.PAC, whose stream offsets are not known yet. */
+        if (disc && ps2_region != PS2_REGION_US)
+            ps2_log("nustream file test: skipped (US disc only, %s)", ps2_game_id);
+        else if (disc) rc |= ps2_nustream_file_selftest(disc);
         return rc;
     }
     if (want_vif_test) return ps2_vif_selftest();
