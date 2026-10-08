@@ -108,6 +108,7 @@ set(RUNTIME_SOURCES
     runtime/src/ps2_params.c
     runtime/src/ps2_lua.c
     runtime/src/ps2_ui.cpp
+    runtime/src/ps2_ui_win32.cpp
     runtime/src/rn/rn_census.c
     runtime/src/rn/rn_2d.c
     runtime/src/rn/rn_dump.c
@@ -146,15 +147,19 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
     ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
 set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+# The pad goes to ImGui through ps2_ui.cpp; the backend must not poll XInput on its own.
+set_source_files_properties(${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+    PROPERTIES COMPILE_DEFINITIONS IMGUI_IMPL_WIN32_DISABLE_GAMEPAD)
 list(APPEND RUNTIME_SOURCES ${IMGUI_SOURCES})
 
 add_executable(ac5 ${RUNTIME_SOURCES} ${GENERATED_SOURCES})
 target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                        ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt user32 imm32)
+target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
@@ -200,7 +205,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             "${LUA_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                             ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan ole32 avrt user32 imm32)
+target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan ole32 avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)
