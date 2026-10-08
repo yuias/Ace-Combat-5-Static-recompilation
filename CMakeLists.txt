@@ -96,6 +96,7 @@ set(RUNTIME_SOURCES
     runtime/src/ps2_hle_pad.c
     runtime/src/ps2_hle_iop.c
     runtime/src/ps2_video.c
+    runtime/src/ps2_window.cpp
     runtime/src/ps2_state.c
     runtime/src/ps2_capture.c
     runtime/src/ps2_statecap.c
@@ -153,7 +154,7 @@ add_executable(ac5 ${RUNTIME_SOURCES} ${GENERATED_SOURCES})
 target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                        ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt)
+target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt user32 imm32)
 target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
@@ -199,7 +200,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             "${LUA_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                             ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan ole32 avrt)
+target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan ole32 avrt user32 imm32)
 target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)
