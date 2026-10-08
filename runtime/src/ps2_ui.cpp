@@ -285,7 +285,7 @@ void draw_capture_popup() {
     ImGui::EndPopup();
 }
 
-const char *const WINDOW_MODES[] = { "Windowed", "Borderless fullscreen", "Exclusive fullscreen" };
+const char *const WINDOW_MODES[] = { "Windowed", "Borderless fullscreen" };
 
 struct WinSize { int w, h; const char *tag; };
 const WinSize WIN_SIZES[] = {
@@ -294,18 +294,9 @@ const WinSize WIN_SIZES[] = {
     { 2560, 1440, "1440p" }, { 3840, 2160, "4K" },
 };
 
-void fs_changed() {
-    changed(ps2_cfg.window_mode == PS2_WIN_EXCLUSIVE ? PS2_CFG_WINDOW : 0);
-}
-
 void resolution_controls() {
-    if (ImGui::Combo("Window mode", &ps2_cfg.window_mode, WINDOW_MODES, 3)) {
-        if (ps2_cfg.window_mode != PS2_WIN_WINDOWED) ps2_cfg.fullscreen_type = ps2_cfg.window_mode;
-        changed(PS2_CFG_WINDOW);
-    }
-    help("Borderless covers the screen at the desktop resolution and switches instantly. "
-         "Exclusive changes the display mode itself. F11 or Alt+Enter toggles fullscreen "
-         "using whichever of the two you last picked.");
+    if (ImGui::Combo("Window mode", &ps2_cfg.window_mode, WINDOW_MODES, 2)) changed(PS2_CFG_WINDOW);
+    help("Borderless covers the screen at the desktop resolution. F11 or Alt+Enter toggles it.");
 
     if (ps2_cfg.window_mode == PS2_WIN_WINDOWED) {
         char preview[48];
@@ -326,39 +317,6 @@ void resolution_controls() {
             ImGui::EndCombo();
         }
         help("The window's size in pixels. Dragging the window edge also works and is remembered.");
-    } else if (ps2_cfg.window_mode == PS2_WIN_EXCLUSIVE) {
-        SDL_DisplayID d = SDL_GetDisplayForWindow(g_window);
-        char preview[64];
-        if (ps2_cfg.fs_w <= 0) snprintf(preview, sizeof preview, "Desktop resolution");
-        else snprintf(preview, sizeof preview, "%d x %d @ %.0f Hz", ps2_cfg.fs_w, ps2_cfg.fs_h,
-                      (double)ps2_cfg.fs_hz);
-        if (ImGui::BeginCombo("Fullscreen resolution", preview)) {
-            if (ImGui::Selectable("Desktop resolution", ps2_cfg.fs_w <= 0)) {
-                ps2_cfg.fs_w = ps2_cfg.fs_h = 0;
-                ps2_cfg.fs_hz = 0.0f;
-                fs_changed();
-            }
-            int n = 0;
-            SDL_DisplayMode **modes = d ? SDL_GetFullscreenDisplayModes(d, &n) : nullptr;
-            for (int i = 0; modes && i < n; i++) {
-                const SDL_DisplayMode *m = modes[i];
-                if (m->pixel_density != 1.0f) continue;
-                char label[64];
-                snprintf(label, sizeof label, "%d x %d @ %.0f Hz", m->w, m->h, (double)m->refresh_rate);
-                bool sel = ps2_cfg.fs_w == m->w && ps2_cfg.fs_h == m->h
-                        && std::fabs(ps2_cfg.fs_hz - m->refresh_rate) < 0.5f;
-                ImGui::PushID(i);
-                if (ImGui::Selectable(label, sel)) {
-                    ps2_cfg.fs_w = m->w;
-                    ps2_cfg.fs_h = m->h;
-                    ps2_cfg.fs_hz = m->refresh_rate;
-                    fs_changed();
-                }
-                ImGui::PopID();
-            }
-            SDL_free(modes);
-            ImGui::EndCombo();
-        }
     } else {
         ImGui::TextDisabled("Borderless fullscreen always runs at the desktop resolution.");
     }

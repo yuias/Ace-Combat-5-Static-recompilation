@@ -128,8 +128,7 @@ int main(void) {
         ps2_settings a;
         ps2_settings_defaults(&a);
         a.anisotropy = 8; a.fxaa = 1; a.sharpen = 0.3f; a.scale_filter = PS2_SCALE_SHARP;
-        a.brightness = -0.12f; a.gamma = 1.3f; a.window_mode = PS2_WIN_EXCLUSIVE;
-        a.fullscreen_type = PS2_WIN_EXCLUSIVE; a.fs_w = 1920; a.fs_h = 1080; a.fs_hz = 143.98f;
+        a.brightness = -0.12f; a.gamma = 1.3f; a.window_mode = PS2_WIN_BORDERLESS;
         a.aspect = PS2_ASPECT_CUSTOM; a.aspect_custom = 2.1f; a.widescreen = 1; a.integer_scale = 1;
         a.present_mode = PS2_PRESENT_IMMEDIATE; a.fps_limit = 90; a.show_fps = 1; a.ui_scale = 1.25f;
         a.key[PS2_ACT_CROSS][1] = SDL_SCANCODE_SPACE;
@@ -146,8 +145,7 @@ int main(void) {
         CHECK(b->preset == a.preset && b->anisotropy == 8 && b->fxaa == 1 && feq(b->sharpen, 0.3f)
               && b->scale_filter == PS2_SCALE_SHARP && feq(b->brightness, -0.12f) && feq(b->gamma, 1.3f),
               "graphics fields did not round-trip");
-        CHECK(b->window_mode == PS2_WIN_EXCLUSIVE && b->fullscreen_type == PS2_WIN_EXCLUSIVE && b->fs_w == 1920
-              && b->fs_h == 1080 && feq(b->fs_hz, 143.98f) && b->aspect == PS2_ASPECT_CUSTOM
+        CHECK(b->window_mode == PS2_WIN_BORDERLESS && b->aspect == PS2_ASPECT_CUSTOM
               && feq(b->aspect_custom, 2.1f) && b->widescreen == 1 && b->integer_scale == 1
               && b->present_mode == PS2_PRESENT_IMMEDIATE && b->fps_limit == 90 && b->show_fps == 1
               && feq(b->ui_scale, 1.25f), "display fields did not round-trip");
@@ -184,6 +182,29 @@ int main(void) {
         fclose(f);
         ps2_settings_load();
         CHECK(ps2_cfg.internal_res == 0, "internal resolution -3 was not clamped (%d)", ps2_cfg.internal_res);
+    }
+
+    {
+        /* Files written while exclusive fullscreen existed: mode 2 loads as borderless and the
+           obsolete keys are skipped without hiding the keys after them. The first key name is
+           split so that a search for the removed setting finds no live use. */
+        FILE *f = fopen(ps2_settings_path(), "w");
+        char line[512];
+        int stale = 0;
+        fprintf(f, "[display]\nwindow_mode = 2\nfullscreen" "_type = 2\nfullscreen_width = 1920\n"
+                   "fullscreen_height = 1080\nfullscreen_refresh = 143.98\nwindow_width = 1600\n");
+        fclose(f);
+        ps2_settings_load();
+        CHECK(ps2_cfg.window_mode == PS2_WIN_BORDERLESS && ps2_cfg.window_w == 1600,
+              "an old exclusive fullscreen file did not load as borderless (%d, %d)",
+              ps2_cfg.window_mode, ps2_cfg.window_w);
+        ps2_settings_save();
+        f = fopen(ps2_settings_path(), "r");
+        CHECK(f != NULL, "settings file missing after save");
+        while (f && fgets(line, sizeof line, f))
+            if (strstr(line, "fullscreen_")) stale++;
+        if (f) fclose(f);
+        CHECK(stale == 0, "the saved file still has %d fullscreen_ lines", stale);
     }
 
     {

@@ -25,7 +25,7 @@ enum { PS2_PRESET_LOW, PS2_PRESET_MEDIUM, PS2_PRESET_HIGH, PS2_PRESET_ULTRA,
        PS2_PRESET_CUSTOM };
 enum { PS2_TEXFILTER_GAME, PS2_TEXFILTER_NEAREST, PS2_TEXFILTER_BILINEAR };
 enum { PS2_SCALE_NEAREST, PS2_SCALE_BILINEAR, PS2_SCALE_SHARP };
-enum { PS2_WIN_WINDOWED, PS2_WIN_BORDERLESS, PS2_WIN_EXCLUSIVE };
+enum { PS2_WIN_WINDOWED, PS2_WIN_BORDERLESS };
 enum { PS2_ASPECT_STRETCH, PS2_ASPECT_AUTO, PS2_ASPECT_4_3, PS2_ASPECT_16_9,
        PS2_ASPECT_CUSTOM };
 enum { PS2_PRESENT_MAILBOX, PS2_PRESENT_FIFO, PS2_PRESENT_IMMEDIATE,
@@ -47,10 +47,7 @@ typedef struct ps2_settings {
     float gamma;
     float saturation;
     int   window_mode;
-    int   fullscreen_type;
     int   window_w, window_h;
-    int   fs_w, fs_h;
-    float fs_hz;
     int   aspect;
     float aspect_custom;
     int   integer_scale;

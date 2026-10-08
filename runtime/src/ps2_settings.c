@@ -176,7 +176,6 @@ void ps2_settings_defaults(ps2_settings *s) {
     s->gamma = 1.0f;
     s->saturation = 1.0f;
     s->window_mode = PS2_WIN_WINDOWED;
-    s->fullscreen_type = PS2_WIN_BORDERLESS;
     s->window_w = 1280;
     s->window_h = 896;
     s->aspect = PS2_ASPECT_STRETCH;
@@ -212,13 +211,10 @@ static void sanitize(ps2_settings *s) {
     s->contrast = clampf(s->contrast, 0.5f, 1.5f);
     s->gamma = clampf(s->gamma, 0.5f, 2.0f);
     s->saturation = clampf(s->saturation, 0.0f, 2.0f);
-    s->window_mode = clampi(s->window_mode, 0, 2);
-    if (s->fullscreen_type != PS2_WIN_EXCLUSIVE) s->fullscreen_type = PS2_WIN_BORDERLESS;
+    /* Mode 2 used to be exclusive fullscreen; files that still say 2 load as borderless. */
+    s->window_mode = clampi(s->window_mode, 0, 1);
     s->window_w = clampi(s->window_w, 320, 16384);
     s->window_h = clampi(s->window_h, 224, 16384);
-    s->fs_w = clampi(s->fs_w, 0, 16384);
-    s->fs_h = clampi(s->fs_h, 0, 16384);
-    s->fs_hz = clampf(s->fs_hz, 0.0f, 1000.0f);
     s->aspect = clampi(s->aspect, 0, 4);
     s->aspect_custom = clampf(s->aspect_custom, 0.5f, 4.0f);
     s->integer_scale = s->integer_scale != 0;
@@ -264,13 +260,9 @@ static const cfg_field fields[] = {
     FF("postfx", "contrast", contrast, "0.5..1.5"),
     FF("postfx", "gamma", gamma, "0.5..2.0"),
     FF("postfx", "saturation", saturation, "0..2"),
-    FI("display", "window_mode", window_mode, "0 windowed, 1 borderless fullscreen, 2 exclusive fullscreen"),
-    FI("display", "fullscreen_type", fullscreen_type, "what F11 enters: 1 borderless, 2 exclusive"),
+    FI("display", "window_mode", window_mode, "0 windowed, 1 borderless fullscreen"),
     FI("display", "window_width", window_w, "windowed size in pixels"),
     FI("display", "window_height", window_h, ""),
-    FI("display", "fullscreen_width", fs_w, "exclusive fullscreen; 0 = desktop resolution"),
-    FI("display", "fullscreen_height", fs_h, ""),
-    FF("display", "fullscreen_refresh", fs_hz, "Hz; 0 = desktop refresh rate"),
     FI("display", "aspect", aspect, "0 stretch to window, 1 auto (4:3, 16:9 with widescreen), 2 4:3, 3 16:9, 4 custom"),
     FF("display", "aspect_custom", aspect_custom, "width / height"),
     FI("display", "integer_scale", integer_scale, "1 whole-number scaling only"),
@@ -314,7 +306,7 @@ static char *trim(char *p) {
 
 static void log_summary(const char *source) {
     static const char *const presets_n[] = { "low", "medium", "high", "ultra", "custom" };
-    static const char *const win_n[] = { "windowed", "borderless", "exclusive" };
+    static const char *const win_n[] = { "windowed", "borderless" };
     static const char *const present_n[] = { "mailbox", "fifo", "immediate", "fifo-relaxed" };
     ps2_log("settings: %s -- preset %s, internal resolution %s%d, texture filter %d, "
             "anisotropy %d, %s %dx%d, aspect %d, widescreen %d, present %s, fps limit %d",

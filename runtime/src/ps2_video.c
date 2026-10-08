@@ -4413,19 +4413,7 @@ static void apply_window_settings(void) {
         SDL_SetWindowSize(window, ps2_cfg.window_w, ps2_cfg.window_h);
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     } else {
-        SDL_DisplayMode mode;
-        int ok = 0;
-        if (ps2_cfg.window_mode == PS2_WIN_EXCLUSIVE) {
-            SDL_DisplayID d = SDL_GetDisplayForWindow(window);
-            const SDL_DisplayMode *desk = d ? SDL_GetDesktopDisplayMode(d) : NULL;
-            int w = ps2_cfg.fs_w > 0 ? ps2_cfg.fs_w : desk ? desk->w : 0;
-            int h = ps2_cfg.fs_h > 0 ? ps2_cfg.fs_h : desk ? desk->h : 0;
-            float hz = ps2_cfg.fs_hz > 0.0f ? ps2_cfg.fs_hz
-                     : desk ? desk->refresh_rate : 0.0f;
-            ok = w > 0 && h > 0
-              && SDL_GetClosestFullscreenDisplayMode(d, w, h, hz, false, &mode);
-        }
-        SDL_SetWindowFullscreenMode(window, ok ? &mode : NULL);
+        SDL_SetWindowFullscreenMode(window, NULL);
         want_fullscreen = 1;
         SDL_SetWindowFullscreen(window, true);
     }
@@ -4529,7 +4517,7 @@ static void pump_events(void) {
             if (e.key.key == SDLK_F11
                 || (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT))) {
                 ps2_cfg.window_mode = want_fullscreen ? PS2_WIN_WINDOWED
-                                                      : ps2_cfg.fullscreen_type;
+                                                      : PS2_WIN_BORDERLESS;
                 apply_window_settings();
                 ps2_settings_touch(PS2_CFG_SAVE);
             }
