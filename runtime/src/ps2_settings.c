@@ -47,11 +47,82 @@ const char *ps2_action_name(int act) {
     return act >= 0 && act < PS2_ACT_COUNT ? act_names[act] : "?";
 }
 
+/* Set-1 scan code (the 0x00nn plain codes) to HID id, laid out 16 per row. */
+static const unsigned char scan_plain[0x80] = {
+    /* 00 */ 0, 41, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 45, 46, 42, 43,
+    /* 10 */ 20, 26, 8, 21, 23, 28, 24, 12, 18, 19, 47, 48, 40, 224, 4, 22,
+    /* 20 */ 7, 9, 10, 11, 13, 14, 15, 51, 52, 53, 225, 49, 29, 27, 6, 25,
+    /* 30 */ 5, 17, 16, 54, 55, 56, 229, 85, 226, 44, 57, 58, 59, 60, 61, 62,
+    /* 40 */ 63, 64, 65, 66, 67, 72, 71, 95, 96, 97, 86, 92, 93, 94, 87, 89,
+    /* 50 */ 90, 91, 98, 99, 0, 0, 100, 68, 69, 103, 0, 0, 0, 0, 0, 0,
+    /* 60 */ 0, 0, 0, 0, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 0,
+    /* 70 */ 136, 0, 0, 135, 0, 0, 115, 0, 0, 138, 0, 139, 0, 137, 133, 0,
+};
+
+int ps2_key_from_scancode(unsigned code) {
+    if (code == 0xE11Du) return 72;
+    if (code < 0x80u) return scan_plain[code];
+    if ((code & 0xFF00u) != 0xE000u) return 0;
+    switch (code & 0xFFu) {
+    case 0x1C: return 88;   /* Keypad Enter */
+    case 0x1D: return 228;  /* Right Ctrl */
+    case 0x20: return 127;  /* Mute */
+    case 0x2E: return 129;  /* Volume down */
+    case 0x30: return 128;  /* Volume up */
+    case 0x35: return 84;   /* Keypad / */
+    case 0x37: return 70;   /* PrintScreen */
+    case 0x38: return 230;  /* Right Alt */
+    case 0x45: return 83;   /* NumLock */
+    case 0x46: return 72;   /* Ctrl+Pause */
+    case 0x47: return 74;   /* Home */
+    case 0x48: return 82;   /* Up */
+    case 0x49: return 75;   /* PageUp */
+    case 0x4B: return 80;   /* Left */
+    case 0x4D: return 79;   /* Right */
+    case 0x4F: return 77;   /* End */
+    case 0x50: return 81;   /* Down */
+    case 0x51: return 78;   /* PageDown */
+    case 0x52: return 73;   /* Insert */
+    case 0x53: return 76;   /* Delete */
+    case 0x5B: return 227;  /* Left GUI */
+    case 0x5C: return 231;  /* Right GUI */
+    case 0x5D: return 101;  /* Application */
+    case 0x5E: return 102;  /* Power */
+    default:   return 0;
+    }
+}
+
+/* Indexed by HID id; the strings are the names SDL gives scancodes (the
+   settings test compares them), so the menu and the settings file keep
+   showing the same names. NULL means no name. */
+static const char *const key_names[232] = {
+    [4] = "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+    "Return", "Escape", "Backspace", "Tab", "Space", "-", "=", "[", "]", "\\",
+    [51] = ";", "'", "`", ",", ".", "/", "CapsLock",
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    "PrintScreen", "ScrollLock", "Pause", "Insert", "Home", "PageUp", "Delete",
+    "End", "PageDown", "Right", "Left", "Down", "Up", "Numlock",
+    "Keypad /", "Keypad *", "Keypad -", "Keypad +", "Keypad Enter",
+    "Keypad 1", "Keypad 2", "Keypad 3", "Keypad 4", "Keypad 5", "Keypad 6",
+    "Keypad 7", "Keypad 8", "Keypad 9", "Keypad 0", "Keypad .",
+    "NonUSBackslash", "Application", "Power", "Keypad =",
+    "F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22",
+    "F23", "F24",
+    [127] = "Mute", "VolumeUp", "VolumeDown",
+    [133] = "Keypad ,",
+    [135] = "International 1", "International 2", "International 3",
+    "International 4", "International 5",
+    [224] = "Left Ctrl", "Left Shift", "Left Alt", "Left GUI",
+    "Right Ctrl", "Right Shift", "Right Alt", "Right GUI",
+};
+
 const char *ps2_key_name(int scancode) {
-    const char *n;
     if (scancode <= 0) return "-";
-    n = SDL_GetScancodeName((SDL_Scancode)scancode);
-    return n && *n ? n : "Unknown key";
+    if (scancode >= (int)(sizeof key_names / sizeof key_names[0]) || !key_names[scancode])
+        return "Unknown key";
+    return key_names[scancode];
 }
 
 const char *ps2_padbind_name(int code) {
@@ -80,25 +151,25 @@ const char *ps2_padbind_name(int code) {
 void ps2_settings_default_bindings(ps2_settings *s, int keyboard, int pad) {
     if (keyboard) {
         memset(s->key, 0, sizeof s->key);
-        s->key[PS2_ACT_START][0]    = SDL_SCANCODE_RETURN;
-        s->key[PS2_ACT_SELECT][0]   = SDL_SCANCODE_RSHIFT;
-        s->key[PS2_ACT_UP][0]       = SDL_SCANCODE_UP;
-        s->key[PS2_ACT_DOWN][0]     = SDL_SCANCODE_DOWN;
-        s->key[PS2_ACT_LEFT][0]     = SDL_SCANCODE_LEFT;
-        s->key[PS2_ACT_RIGHT][0]    = SDL_SCANCODE_RIGHT;
-        s->key[PS2_ACT_CROSS][0]    = SDL_SCANCODE_X;
-        s->key[PS2_ACT_SQUARE][0]   = SDL_SCANCODE_Z;
-        s->key[PS2_ACT_CIRCLE][0]   = SDL_SCANCODE_S;
-        s->key[PS2_ACT_TRIANGLE][0] = SDL_SCANCODE_A;
-        s->key[PS2_ACT_L1][0]       = SDL_SCANCODE_Q;
-        s->key[PS2_ACT_R1][0]       = SDL_SCANCODE_E;
-        s->key[PS2_ACT_L2][0]       = SDL_SCANCODE_1;
-        s->key[PS2_ACT_R2][0]       = SDL_SCANCODE_3;
-        s->key[PS2_ACT_LS_UP][0]    = SDL_SCANCODE_W;
-        s->key[PS2_ACT_LS_UP][1]    = SDL_SCANCODE_KP_8;
-        s->key[PS2_ACT_LS_DOWN][0]  = SDL_SCANCODE_KP_2;
-        s->key[PS2_ACT_LS_LEFT][0]  = SDL_SCANCODE_KP_4;
-        s->key[PS2_ACT_LS_RIGHT][0] = SDL_SCANCODE_KP_6;
+        s->key[PS2_ACT_START][0]    = PS2_KEY_RETURN;
+        s->key[PS2_ACT_SELECT][0]   = PS2_KEY_RSHIFT;
+        s->key[PS2_ACT_UP][0]       = PS2_KEY_UP;
+        s->key[PS2_ACT_DOWN][0]     = PS2_KEY_DOWN;
+        s->key[PS2_ACT_LEFT][0]     = PS2_KEY_LEFT;
+        s->key[PS2_ACT_RIGHT][0]    = PS2_KEY_RIGHT;
+        s->key[PS2_ACT_CROSS][0]    = PS2_KEY_X;
+        s->key[PS2_ACT_SQUARE][0]   = PS2_KEY_Z;
+        s->key[PS2_ACT_CIRCLE][0]   = PS2_KEY_S;
+        s->key[PS2_ACT_TRIANGLE][0] = PS2_KEY_A;
+        s->key[PS2_ACT_L1][0]       = PS2_KEY_Q;
+        s->key[PS2_ACT_R1][0]       = PS2_KEY_E;
+        s->key[PS2_ACT_L2][0]       = PS2_KEY_1;
+        s->key[PS2_ACT_R2][0]       = PS2_KEY_3;
+        s->key[PS2_ACT_LS_UP][0]    = PS2_KEY_W;
+        s->key[PS2_ACT_LS_UP][1]    = PS2_KEY_KP_8;
+        s->key[PS2_ACT_LS_DOWN][0]  = PS2_KEY_KP_2;
+        s->key[PS2_ACT_LS_LEFT][0]  = PS2_KEY_KP_4;
+        s->key[PS2_ACT_LS_RIGHT][0] = PS2_KEY_KP_6;
     }
     if (pad) {
         memset(s->pad, 0, sizeof s->pad);
@@ -227,7 +298,7 @@ static void sanitize(ps2_settings *s) {
     s->block_input_in_menu = s->block_input_in_menu != 0;
     for (int a = 0; a < PS2_ACT_COUNT; a++)
         for (int k = 0; k < PS2_BIND_SLOTS; k++) {
-            if (s->key[a][k] < 0 || s->key[a][k] >= SDL_SCANCODE_COUNT) s->key[a][k] = 0;
+            if (s->key[a][k] < 0 || s->key[a][k] >= PS2_KEY_COUNT) s->key[a][k] = 0;
             if (s->pad[a][k] < 0 || s->pad[a][k] > 0x1FF) s->pad[a][k] = 0;
         }
     s->deadzone = clampf(s->deadzone, 0.0f, 1.0f);
@@ -403,7 +474,7 @@ void ps2_settings_save(void) {
         if (fd->comment[0]) fprintf(f, "%-26s = %-10s ; %s\n", fd->key, val, fd->comment);
         else fprintf(f, "%-26s = %s\n", fd->key, val);
     }
-    fprintf(f, "\n[keyboard]\n; action = primary secondary, as SDL scancodes (0 = unbound)\n");
+    fprintf(f, "\n[keyboard]\n; action = primary secondary, as USB HID key codes (the numbers SDL scancodes use; 0 = unbound)\n");
     for (int a = 0; a < PS2_ACT_COUNT; a++)
         fprintf(f, "%-26s = %3d %3d    ; %s, %s\n", act_keys[a], ps2_cfg.key[a][0],
                 ps2_cfg.key[a][1], ps2_key_name(ps2_cfg.key[a][0]),

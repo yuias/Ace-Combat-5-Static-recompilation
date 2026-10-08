@@ -28,6 +28,39 @@ void ps2_mmio_w32(u32 a, u32 v) { (void)a; (void)v; abort(); }
 void ps2_mmio_w64(u32 a, u64 v) { (void)a; (void)v; abort(); }
 void ps2_mmio_w128(u32 a, const ps2_reg128 *v) { (void)a; (void)v; abort(); }
 
+/* The key ids are USB HID usages; saved binds rely on them matching SDL's scancodes. */
+_Static_assert(PS2_KEY_A == SDL_SCANCODE_A, "PS2_KEY_A");
+_Static_assert(PS2_KEY_E == SDL_SCANCODE_E, "PS2_KEY_E");
+_Static_assert(PS2_KEY_Q == SDL_SCANCODE_Q, "PS2_KEY_Q");
+_Static_assert(PS2_KEY_S == SDL_SCANCODE_S, "PS2_KEY_S");
+_Static_assert(PS2_KEY_W == SDL_SCANCODE_W, "PS2_KEY_W");
+_Static_assert(PS2_KEY_X == SDL_SCANCODE_X, "PS2_KEY_X");
+_Static_assert(PS2_KEY_Z == SDL_SCANCODE_Z, "PS2_KEY_Z");
+_Static_assert(PS2_KEY_1 == SDL_SCANCODE_1, "PS2_KEY_1");
+_Static_assert(PS2_KEY_3 == SDL_SCANCODE_3, "PS2_KEY_3");
+_Static_assert(PS2_KEY_RETURN == SDL_SCANCODE_RETURN, "PS2_KEY_RETURN");
+_Static_assert(PS2_KEY_ESCAPE == SDL_SCANCODE_ESCAPE, "PS2_KEY_ESCAPE");
+_Static_assert(PS2_KEY_BACKSPACE == SDL_SCANCODE_BACKSPACE, "PS2_KEY_BACKSPACE");
+_Static_assert(PS2_KEY_SPACE == SDL_SCANCODE_SPACE, "PS2_KEY_SPACE");
+_Static_assert(PS2_KEY_F4 == SDL_SCANCODE_F4, "PS2_KEY_F4");
+_Static_assert(PS2_KEY_F6 == SDL_SCANCODE_F6, "PS2_KEY_F6");
+_Static_assert(PS2_KEY_F7 == SDL_SCANCODE_F7, "PS2_KEY_F7");
+_Static_assert(PS2_KEY_F8 == SDL_SCANCODE_F8, "PS2_KEY_F8");
+_Static_assert(PS2_KEY_F9 == SDL_SCANCODE_F9, "PS2_KEY_F9");
+_Static_assert(PS2_KEY_F10 == SDL_SCANCODE_F10, "PS2_KEY_F10");
+_Static_assert(PS2_KEY_F11 == SDL_SCANCODE_F11, "PS2_KEY_F11");
+_Static_assert(PS2_KEY_DELETE == SDL_SCANCODE_DELETE, "PS2_KEY_DELETE");
+_Static_assert(PS2_KEY_RIGHT == SDL_SCANCODE_RIGHT, "PS2_KEY_RIGHT");
+_Static_assert(PS2_KEY_LEFT == SDL_SCANCODE_LEFT, "PS2_KEY_LEFT");
+_Static_assert(PS2_KEY_DOWN == SDL_SCANCODE_DOWN, "PS2_KEY_DOWN");
+_Static_assert(PS2_KEY_UP == SDL_SCANCODE_UP, "PS2_KEY_UP");
+_Static_assert(PS2_KEY_KP_2 == SDL_SCANCODE_KP_2, "PS2_KEY_KP_2");
+_Static_assert(PS2_KEY_KP_4 == SDL_SCANCODE_KP_4, "PS2_KEY_KP_4");
+_Static_assert(PS2_KEY_KP_6 == SDL_SCANCODE_KP_6, "PS2_KEY_KP_6");
+_Static_assert(PS2_KEY_KP_8 == SDL_SCANCODE_KP_8, "PS2_KEY_KP_8");
+_Static_assert(PS2_KEY_RSHIFT == SDL_SCANCODE_RSHIFT, "PS2_KEY_RSHIFT");
+_Static_assert(PS2_KEY_COUNT == SDL_SCANCODE_COUNT, "PS2_KEY_COUNT");
+
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
@@ -116,6 +149,44 @@ int main(void) {
     CHECK(ps2_cfg.key[PS2_ACT_CROSS][0] == SDL_SCANCODE_X && ps2_cfg.key[PS2_ACT_START][0] == SDL_SCANCODE_RETURN
           && ps2_cfg.key[PS2_ACT_LS_UP][0] == SDL_SCANCODE_W && ps2_cfg.key[PS2_ACT_LS_UP][1] == SDL_SCANCODE_KP_8,
           "default keyboard map");
+    {
+        static const struct { unsigned code; int key; } map[] = {
+            { 0x1C, 40 }, { 0xE01C, 88 }, { 0x48, 96 }, { 0xE048, 82 }, { 0x50, 90 }, { 0xE050, 81 },
+            { 0x4B, 92 }, { 0xE04B, 80 }, { 0x4D, 94 }, { 0xE04D, 79 }, { 0x2A, 225 }, { 0x36, 229 },
+            { 0x1D, 224 }, { 0xE01D, 228 }, { 0x38, 226 }, { 0xE038, 230 }, { 0x45, 72 }, { 0xE045, 83 },
+            { 0xE11D, 72 }, { 0x53, 99 }, { 0xE053, 76 }, { 0x01, 41 }, { 0x2D, 27 }, { 0x39, 44 },
+            { 0x57, 68 }, { 0xE035, 84 }, { 0x00, 0 }, { 0xE07F, 0 },
+        };
+        unsigned char reached[PS2_KEY_COUNT] = { 0 };
+        int nreached = 0;
+        for (size_t i = 0; i < sizeof map / sizeof map[0]; i++)
+            CHECK(ps2_key_from_scancode(map[i].code) == map[i].key,
+                  "scan code 0x%X maps to %d, expected %d", map[i].code,
+                  ps2_key_from_scancode(map[i].code), map[i].key);
+        for (unsigned c = 0; c <= 0xE11Du; c++) {
+            int k;
+            if (c > 0x7F && !(c >= 0xE000u && c <= 0xE07Fu) && c != 0xE11Du) continue;
+            k = ps2_key_from_scancode(c);
+            if (!k) continue;
+            CHECK(k > 0 && k < PS2_KEY_COUNT, "scan code 0x%X maps outside the key range (%d)", c, k);
+            if (k > 0 && k < PS2_KEY_COUNT) reached[k] = 1;
+        }
+        CHECK(ps2_key_from_scancode(0x80) == 0 && ps2_key_from_scancode(0xE080) == 0
+              && ps2_key_from_scancode(0xE11C) == 0 && ps2_key_from_scancode(0x1E1D) == 0,
+              "a scan code outside the tables was mapped");
+        CHECK(!strcmp(ps2_key_name(0), "-") && !strcmp(ps2_key_name(-5), "-"), "unbound key name");
+        for (int k = 1; k < PS2_KEY_COUNT; k++) {
+            const char *sdl, *want;
+            if (!reached[k]) continue;
+            nreached++;
+            sdl = SDL_GetScancodeName((SDL_Scancode)k);
+            want = sdl && *sdl ? sdl : "Unknown key";
+            CHECK(!strcmp(ps2_key_name(k), want), "key %d is named \"%s\", SDL says \"%s\"",
+                  k, ps2_key_name(k), want);
+        }
+        printf("keys: %d reachable ids checked against SDL_GetScancodeName\n", nreached);
+    }
+
     CHECK(ps2_cfg.pad[PS2_ACT_CROSS][0] == PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_SOUTH)
           && ps2_cfg.pad[PS2_ACT_R2][0] == PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1)
           && ps2_cfg.pad[PS2_ACT_LS_LEFT][0] == PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_LEFTX, 0),

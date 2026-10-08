@@ -17,6 +17,24 @@ enum {
 #define PS2_ACT_BUTTONS 16
 #define PS2_BIND_SLOTS  2
 
+/* USB HID keyboard usage ids: the numbers SDL scancodes use, so binds saved
+   by older builds keep their meaning. Only the ids the runtime names in code
+   are listed. */
+enum {
+    PS2_KEY_A = 4, PS2_KEY_E = 8, PS2_KEY_Q = 20, PS2_KEY_S = 22,
+    PS2_KEY_W = 26, PS2_KEY_X = 27, PS2_KEY_Z = 29,
+    PS2_KEY_1 = 30, PS2_KEY_3 = 32,
+    PS2_KEY_RETURN = 40, PS2_KEY_ESCAPE = 41, PS2_KEY_BACKSPACE = 42,
+    PS2_KEY_SPACE = 44,
+    PS2_KEY_F4 = 61, PS2_KEY_F6 = 63, PS2_KEY_F7 = 64, PS2_KEY_F8 = 65,
+    PS2_KEY_F9 = 66, PS2_KEY_F10 = 67, PS2_KEY_F11 = 68,
+    PS2_KEY_DELETE = 76, PS2_KEY_RIGHT = 79, PS2_KEY_LEFT = 80,
+    PS2_KEY_DOWN = 81, PS2_KEY_UP = 82,
+    PS2_KEY_KP_2 = 90, PS2_KEY_KP_4 = 92, PS2_KEY_KP_6 = 94, PS2_KEY_KP_8 = 96,
+    PS2_KEY_RSHIFT = 229,
+    PS2_KEY_COUNT = 512
+};
+
 #define PS2_PADBIND_AXIS          0x100
 #define PS2_PADBIND_BUTTON(b)     ((int)(b) + 1)
 #define PS2_PADBIND_AXISDIR(a, p) (PS2_PADBIND_AXIS | ((int)(a) << 1) | ((p) ? 1 : 0))
@@ -84,6 +102,10 @@ void ps2_settings_touch(int dirty);
 int  ps2_settings_take_dirty(void);
 
 const char *ps2_action_name(int act);
+/* Win32 Set-1 scan code to HID id. code is 0x00nn for a plain key, 0xE0nn
+   for a key with the E0 (extended) prefix, or 0xE11D for Pause as
+   MapVirtualKey reports it. Returns 0 for keys without a mapping. */
+int ps2_key_from_scancode(unsigned code);
 const char *ps2_key_name(int scancode);
 const char *ps2_padbind_name(int code);
 
