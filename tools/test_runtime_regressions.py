@@ -19,6 +19,8 @@ harness = r'''
 void ps2_preempt(void) {}
 u32 ps2_loop_ctr;
 void ps2_loop_service(void) {}
+/* ps2_vu0_ctc reaches the VU1 control path, which lives in ps2_vu.c; the probe never writes that register. */
+void ps2_vu_control_stop(ps2_ctx *ctx, u32 val) { (void)ctx; (void)val; abort(); }
 const ps2_func_entry ps2_func_table[1] = {{0}};
 const unsigned ps2_func_count = 0;
 const ps2_symbol ps2_symbols[1] = {{0}};
@@ -40,7 +42,7 @@ harness += cleanup_source[start:end]
 harness += cleanup_source[start:end].replace('func_00356C38', 'old_cleanup_entry').replace('    goto L_00356C38;\n', '')
 words = [0x50800001, 0, 0, 0, 0x48428800, 0x03E00008, 0]
 insns = {0x1000+i*4: decode(w, 0x1000+i*4) for i,w in enumerate(words)}
-fn = SimpleNamespace(entry=0x1000, addrs=[0x1000,0x1008,0x100C,0x1010,0x1014], labels={0x1008})
+fn = SimpleNamespace(entry=0x1000, addrs=[0x1000,0x1008,0x100C,0x1010,0x1014], labels={0x1008}, delay_slots=set())
 program = SimpleNamespace(insns=insns, names={}, functions={0x1000:fn}, switches={}, in_text=lambda a: a in insns)
 harness += Emitter(program).emit_function(fn)
 harness += r'''
