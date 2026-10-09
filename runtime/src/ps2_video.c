@@ -5,6 +5,7 @@
 #include "ps2_vk.h"
 #include "ps2_settings.h"
 #include "ps2_ui.h"
+#include "ps2_gamepad.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -14,7 +15,6 @@
 #include <errno.h>
 #include <time.h>
 
-#include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>
 
 #include "ps2_window.h"
@@ -4079,9 +4079,8 @@ finished:
 enum { B_SELECT = 0, B_L3, B_R3, B_START, B_UP, B_RIGHT, B_DOWN, B_LEFT,
        B_L2, B_R2, B_L1, B_R1, B_TRIANGLE, B_CIRCLE, B_CROSS, B_SQUARE };
 
-static SDL_Gamepad *gamepad;
-/* SDL_Init(SDL_INIT_GAMEPAD) succeeded; the event and pad paths here skip SDL without it. */
-static int sdl_pad_ok;
+/* Selected pad of the last pump_events, to reset trigger rest values on a change. */
+static uint32_t pad_seen;
 
 static int window_hidden;
 void ps2_video_hidden(int on) { window_hidden = on; }
@@ -4109,41 +4108,28 @@ static int trigger_raw(pad_trigger *t, int v) {
 static int padbind_is_trigger(int code) {
     int axis = (code & 0xFF) >> 1;
     return (code & PS2_PADBIND_AXIS)
-        && (axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER
-            || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+        && (axis == PS2_PAD_AXIS_LEFT_TRIGGER
+            || axis == PS2_PAD_AXIS_RIGHT_TRIGGER);
 }
 
 static float padbind_value(int code) {
-    if (!gamepad || code <= 0) return 0.0f;
+    if (!ps2_gamepad_current() || code <= 0) return 0.0f;
     if (code & PS2_PADBIND_AXIS) {
         int axis = (code & 0xFF) >> 1, v;
-        if (axis >= SDL_GAMEPAD_AXIS_COUNT) return 0.0f;
-        v = SDL_GetGamepadAxis(gamepad, (SDL_GamepadAxis)axis);
+        if (axis >= PS2_PAD_AXIS_COUNT) return 0.0f;
+        v = ps2_gamepad_axis(axis);
         if (padbind_is_trigger(code))
-            v = trigger_raw(axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? &trig_l : &trig_r, v);
+            v = trigger_raw(axis == PS2_PAD_AXIS_LEFT_TRIGGER ? &trig_l : &trig_r, v);
         return ps2_pad_axis_value(v, code & 1);
     }
-    if (code - 1 >= SDL_GAMEPAD_BUTTON_COUNT) return 0.0f;
-    return SDL_GetGamepadButton(gamepad, (SDL_GamepadButton)(code - 1)) ? 1.0f : 0.0f;
-}
-
-SDL_Gamepad *ps2_video_gamepad(void) { return gamepad; }
-
-void ps2_video_select_gamepad(SDL_JoystickID id) {
-    SDL_Gamepad *g;
-    if (gamepad && SDL_GetGamepadID(gamepad) == id) return;
-    g = SDL_OpenGamepad(id);
-    if (!g) return;
-    if (gamepad) SDL_CloseGamepad(gamepad);
-    gamepad = g;
-    trig_l.have_rest = trig_r.have_rest = 0;
-    ps2_log("pad: %s selected", SDL_GetGamepadName(gamepad));
+    if (code - 1 >= PS2_PAD_BUTTON_COUNT) return 0.0f;
+    return ps2_gamepad_button(code - 1) ? 1.0f : 0.0f;
 }
 
 static void poll_input(void) {
     const unsigned char *keys = window_hidden ? NULL : ps2_window_key_state();
-    /* SDL3 dropped joystick presses while its windows had no focus; keep that. */
-    const int pad_live = gamepad && ps2_window_has_focus();
+    /* No pad input while the window has no keyboard focus. */
+    const int pad_live = ps2_gamepad_current() && ps2_window_has_focus();
     ps2_pad_state st;
     u16 kbmask = 0;
     float value[PS2_ACT_COUNT];
@@ -4191,11 +4177,11 @@ static void poll_input(void) {
             last_src = st.buttons;
             ps2_log("pad src: keyboard=%04X gamepad=%s final=%04X  "
                     "raw LT=%d RT=%d LX=%d LY=%d  out lx=%u ly=%u",
-                    kbmask, gamepad ? "yes" : "no", st.buttons,
-                    gamepad ? SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) : 0,
-                    gamepad ? SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) : 0,
-                    gamepad ? SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) : 0,
-                    gamepad ? SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY) : 0,
+                    kbmask, ps2_gamepad_current() ? "yes" : "no", st.buttons,
+                    ps2_gamepad_axis(PS2_PAD_AXIS_LEFT_TRIGGER),
+                    ps2_gamepad_axis(PS2_PAD_AXIS_RIGHT_TRIGGER),
+                    ps2_gamepad_axis(PS2_PAD_AXIS_LEFTX),
+                    ps2_gamepad_axis(PS2_PAD_AXIS_LEFTY),
                     st.lx, st.ly);
         }
     }
@@ -4423,10 +4409,8 @@ static void settings_service(void) {
 
 static void pump_events(void) {
     ps2_win_event we;
-    SDL_Event e;
+    ps2_pad_event pe;
     test_render_stall();
-    /* Win32 first: SDL without video does not read this thread's window
-       messages, and SDL_PollEvent below still pumps joysticks and hotplug. */
     ps2_window_pump();
     while (ps2_window_next_event(&we)) {
         if (ps2_ui_key_event(&we)) continue;
@@ -4497,28 +4481,16 @@ static void pump_events(void) {
             break;
         }
     }
-    while (sdl_pad_ok && SDL_PollEvent(&e)) {
-        if (ps2_ui_pad_event(&e)) continue;
-        switch (e.type) {
-        case SDL_EVENT_QUIT:
-            /* Ctrl+C in the console. */
-            if (!window_hidden) window_closed = 1;
-            break;
-        case SDL_EVENT_GAMEPAD_ADDED:
-            if (!gamepad) {
-                gamepad = SDL_OpenGamepad(e.gdevice.which);
-                trig_l.have_rest = trig_r.have_rest = 0;
-                if (gamepad) ps2_log("pad: %s connected",
-                                     SDL_GetGamepadName(gamepad));
-            }
-            break;
-        case SDL_EVENT_GAMEPAD_REMOVED:
-            if (gamepad) { SDL_CloseGamepad(gamepad); gamepad = NULL; }
-            break;
-        default:
-            break;
-        }
+    /* Win32 window events first, then gamepads. */
+    ps2_gamepad_update(ps2_window_has_focus());
+    while (ps2_gamepad_next_event(&pe)) ps2_ui_pad_event(&pe);
+    if (ps2_gamepad_current() != pad_seen) {
+        /* A newly selected pad gets its own trigger rest values. */
+        pad_seen = ps2_gamepad_current();
+        trig_l.have_rest = trig_r.have_rest = 0;
     }
+    /* Ctrl+C in the console. */
+    if (ps2_console_quit_take() && !window_hidden) window_closed = 1;
     settings_service();
     poll_input();
 }
@@ -4534,10 +4506,6 @@ static void *renderer_main(void *arg) {
         ps2_mutex_unlock(&list_lock);
         return NULL;
     }
-    /* Gamepads only: the window, its events and the keyboard are Win32. */
-    sdl_pad_ok = SDL_Init(SDL_INIT_GAMEPAD);
-    if (!sdl_pad_ok)
-        ps2_log("pad: SDL_Init: %s; controllers are unavailable", SDL_GetError());
     if (vk_init() != 0) {
         ps2_log("vk: initialisation failed; falling back to the software "
                 "rasteriser");
@@ -4550,6 +4518,7 @@ static void *renderer_main(void *arg) {
     }
     vk_ready = 1;
     ps2_window_set_redraw_hook(modal_redraw);
+    ps2_gamepad_init();
     {   ps2_ui_init_info ui;
         memset(&ui, 0, sizeof(ui));
         ui.hwnd = ps2_window_hwnd();
@@ -4566,18 +4535,7 @@ static void *renderer_main(void *arg) {
     /* Still hidden here, so a borderless start never flashes a windowed frame. */
     if (ps2_cfg.window_mode != PS2_WIN_WINDOWED) apply_window_settings();
     if (!window_hidden) ps2_window_show();
-    if (sdl_pad_ok) {
-        int n = 0;
-        SDL_JoystickID *ids = SDL_GetGamepads(&n);
-        if (ids) {
-            if (n > 0 && !gamepad) {
-                gamepad = SDL_OpenGamepad(ids[0]);
-                if (gamepad)
-                    ps2_log("pad: %s connected", SDL_GetGamepadName(gamepad));
-            }
-            SDL_free(ids);
-        }
-    }
+    if (!window_hidden) ps2_console_quit_install(1);
     ps2_mutex_lock(&list_lock);
     renderer_running = 1;
     ps2_cond_broadcast(&list_cv);
@@ -4609,12 +4567,14 @@ static void *renderer_main(void *arg) {
         update_title();
     }
     ps2_window_set_redraw_hook(NULL);
+    ps2_console_quit_install(0);
     if (ps2_settings_save_pending()) ps2_settings_save();
     ps2_mutex_lock(&gpu_lock);
     if (dev) vkDeviceWaitIdle(dev);
     pipe_cache_save(1);
     ps2_ui_shutdown();
     ps2_mutex_unlock(&gpu_lock);
+    ps2_gamepad_shutdown();
     ps2_window_destroy();
     return NULL;
 }

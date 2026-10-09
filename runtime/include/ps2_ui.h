@@ -1,9 +1,9 @@
 #ifndef PS2_UI_H
 #define PS2_UI_H
 
-#include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>
 
+#include "ps2_gamepad.h"
 #include "ps2_window.h"
 
 #ifdef __cplusplus
@@ -26,8 +26,8 @@ int  ps2_ui_init(const ps2_ui_init_info *info);
 void ps2_ui_shutdown(void);
 /* Window-layer events; 1 = consumed, the game must not act on it. */
 int  ps2_ui_key_event(const ps2_win_event *e);
-/* SDL gamepad events; 1 = consumed by controller rebinding. */
-int  ps2_ui_pad_event(const SDL_Event *e);
+/* Gamepad events; 1 = consumed by controller rebinding. */
+int  ps2_ui_pad_event(const ps2_pad_event *e);
 int  ps2_ui_visible(void);
 void ps2_ui_set_visible(int on);
 int  ps2_ui_blocks_game_input(void);
@@ -45,8 +45,6 @@ typedef struct {
     float    max_line_width;
 } ps2_render_info;
 
-SDL_Gamepad *ps2_video_gamepad(void);
-void ps2_video_select_gamepad(SDL_JoystickID id);
 void ps2_video_render_info(ps2_render_info *out);
 
 #ifdef __cplusplus

@@ -32,7 +32,7 @@ enum { CAP_NONE, CAP_KEY, CAP_PAD };
 int g_cap = CAP_NONE, g_cap_act, g_cap_slot;
 bool g_cap_armed;
 uint64_t g_cap_start;
-Sint16 g_cap_base[SDL_GAMEPAD_AXIS_COUNT];
+int g_cap_base[PS2_PAD_AXIS_COUNT];
 
 enum { TAB_NONE = -1, TAB_KEYBOARD = 4, TAB_CONTROLLER = 5, TAB_ANALOG = 6 };
 int g_want_tab = TAB_NONE;
@@ -153,13 +153,12 @@ void update_capture_arming() {
     const unsigned char *ks = ps2_window_key_state();
     for (int i = 0; i < PS2_KEY_COUNT; i++)
         if (ks[i]) return;
-    SDL_Gamepad *g = ps2_video_gamepad();
     memset(g_cap_base, 0, sizeof g_cap_base);
-    if (g) {
-        for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; b++)
-            if (SDL_GetGamepadButton(g, (SDL_GamepadButton)b)) return;
-        for (int a = 0; a < SDL_GAMEPAD_AXIS_COUNT; a++)
-            g_cap_base[a] = SDL_GetGamepadAxis(g, (SDL_GamepadAxis)a);
+    if (ps2_gamepad_current()) {
+        for (int b = 0; b < PS2_PAD_BUTTON_COUNT; b++)
+            if (ps2_gamepad_button(b)) return;
+        for (int a = 0; a < PS2_PAD_AXIS_COUNT; a++)
+            g_cap_base[a] = ps2_gamepad_axis(a);
     }
     g_cap_armed = true;
 }
@@ -176,22 +175,22 @@ void capture_key(const ps2_win_event *e) {
     end_capture();
 }
 
-bool capture_pad_event(const SDL_Event *e) {
+bool capture_pad_event(const ps2_pad_event *e) {
     switch (e->type) {
-    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case PS2_PEV_BUTTON_UP:
         return true;
-    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case PS2_PEV_BUTTON_DOWN:
         if (g_cap == CAP_PAD && g_cap_armed) {
-            bind_pad(g_cap_act, g_cap_slot, PS2_PADBIND_BUTTON(e->gbutton.button));
+            bind_pad(g_cap_act, g_cap_slot, PS2_PADBIND_BUTTON(e->button));
             end_capture();
         }
         return true;
-    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        if (g_cap == CAP_PAD && g_cap_armed && e->gaxis.axis < SDL_GAMEPAD_AXIS_COUNT) {
-            int axis = e->gaxis.axis;
-            int d = (int)e->gaxis.value - (int)g_cap_base[axis];
-            bool trig = axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER
-                     || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+    case PS2_PEV_AXIS:
+        if (g_cap == CAP_PAD && g_cap_armed && e->axis >= 0 && e->axis < PS2_PAD_AXIS_COUNT) {
+            int axis = e->axis;
+            int d = e->value - g_cap_base[axis];
+            bool trig = axis == PS2_PAD_AXIS_LEFT_TRIGGER
+                     || axis == PS2_PAD_AXIS_RIGHT_TRIGGER;
             if (d > 16000 || d < -16000) {
                 bind_pad(g_cap_act, g_cap_slot,
                          PS2_PADBIND_AXISDIR(axis, trig ? 1 : d > 0));
@@ -634,22 +633,24 @@ void tab_keyboard() {
 }
 
 void tab_controller() {
-    SDL_Gamepad *cur = ps2_video_gamepad();
-    int n = 0;
-    SDL_JoystickID *ids = SDL_GetGamepads(&n);
-    const char *preview = cur ? SDL_GetGamepadName(cur) : "No controller connected";
-    if (!preview) preview = "Controller";
+    ps2_pad_info pads[PS2_GAMEPAD_MAX];
+    int n = ps2_gamepad_list(pads, PS2_GAMEPAD_MAX);
+    const uint32_t cur = ps2_gamepad_current();
+    const char *preview = ps2_gamepad_current_name();
+    if (!preview)
+        preview = ps2_gamepad_status() == PS2_GAMEPAD_STARTING ? "Looking for controllers..."
+                                                              : "No controller connected";
     if (ImGui::BeginCombo("Controller", preview)) {
-        for (int i = 0; ids && i < n; i++) {
-            const char *name = SDL_GetGamepadNameForID(ids[i]);
-            char label[192];
-            snprintf(label, sizeof label, "%s##%u", name ? name : "Controller", (unsigned)ids[i]);
-            bool sel = cur && SDL_GetGamepadID(cur) == ids[i];
-            if (ImGui::Selectable(label, sel)) ps2_video_select_gamepad(ids[i]);
+        for (int i = 0; i < n; i++) {
+            char label[PS2_GAMEPAD_NAME + 16];
+            snprintf(label, sizeof label, "%s##%u", pads[i].name, (unsigned)pads[i].id);
+            if (ImGui::Selectable(label, pads[i].id == cur)) ps2_gamepad_select(pads[i].id);
         }
         ImGui::EndCombo();
     }
-    SDL_free(ids);
+    if (ps2_gamepad_status() == PS2_GAMEPAD_UNAVAILABLE)
+        ImGui::TextColored(WARN, "Controllers need the Microsoft GameInput runtime, which is "
+                                 "missing or too old. See the README.");
     bool block = ps2_cfg.block_input_in_menu != 0;
     if (ImGui::Checkbox("Hold the game's controls while this menu is open", &block)) {
         ps2_cfg.block_input_in_menu = block;
@@ -665,11 +666,10 @@ void tab_controller() {
 }
 
 void stick_view(int s, float size) {
-    SDL_Gamepad *g = ps2_video_gamepad();
     int ax = 0, ay = 0;
-    if (g) {
-        ax = SDL_GetGamepadAxis(g, s ? SDL_GAMEPAD_AXIS_RIGHTX : SDL_GAMEPAD_AXIS_LEFTX);
-        ay = SDL_GetGamepadAxis(g, s ? SDL_GAMEPAD_AXIS_RIGHTY : SDL_GAMEPAD_AXIS_LEFTY);
+    if (ps2_gamepad_current()) {
+        ax = ps2_gamepad_axis(s ? PS2_PAD_AXIS_RIGHTX : PS2_PAD_AXIS_LEFTX);
+        ay = ps2_gamepad_axis(s ? PS2_PAD_AXIS_RIGHTY : PS2_PAD_AXIS_LEFTY);
     }
     const float v[4] = { ps2_pad_axis_value(ay, 0), ps2_pad_axis_value(ay, 1),
                          ps2_pad_axis_value(ax, 0), ps2_pad_axis_value(ax, 1) };
@@ -705,7 +705,7 @@ void tab_analog() {
                        "outside it is passed on as it is, not rescaled. The defaults are PCSX2's: "
                        "no dead zone and 133%% sensitivity.");
     env_note("PS2_PAD_DEADZONE", "overrides the analog dead zone");
-    if (!ps2_video_gamepad())
+    if (!ps2_gamepad_current())
         ImGui::TextDisabled("Connect a controller to see the live preview.");
     else
         ImGui::TextDisabled("Preview: grey is the raw stick, green is what the game receives.");
@@ -750,11 +750,11 @@ void tab_analog() {
         ImGui::EndTable();
     }
 
-    if (SDL_Gamepad *g = ps2_video_gamepad()) {
+    if (ps2_gamepad_current()) {
         ImGui::SeparatorText("Triggers");
         for (int t = 0; t < 2; t++) {
-            int raw = SDL_GetGamepadAxis(g, t ? SDL_GAMEPAD_AXIS_RIGHT_TRIGGER
-                                              : SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+            int raw = ps2_gamepad_axis(t ? PS2_PAD_AXIS_RIGHT_TRIGGER
+                                         : PS2_PAD_AXIS_LEFT_TRIGGER);
             float v = ps2_pad_axis_value(raw, 1);
             unsigned char pressure;
             int held = ps2_pad_trigger(ps2_cfg.button_deadzone, v, &pressure);
@@ -828,52 +828,51 @@ intptr_t msg_hook(void *hwnd, unsigned msg, uintptr_t wparam, intptr_t lparam) {
 }
 
 // The Win32 backend is built without its XInput polling so that the menu
-// follows the pad the game selected; this feeds that pad to ImGui navigation.
+// follows the selected pad; this feeds that pad to ImGui navigation.
 void update_gamepad_nav(ImGuiIO &io) {
-    SDL_Gamepad *pad = ps2_video_gamepad();
-    if (!pad) {
+    if (!ps2_gamepad_current()) {
         io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
         return;
     }
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     // A pad press must not drive the menu while the window has no keyboard focus.
     const bool focused = ps2_window_has_focus() != 0;
-    auto button = [&](ImGuiKey key, SDL_GamepadButton b) {
-        io.AddKeyEvent(key, focused && SDL_GetGamepadButton(pad, b));
+    auto button = [&](ImGuiKey key, int b) {
+        io.AddKeyEvent(key, focused && ps2_gamepad_button(b));
     };
-    auto analog = [&](ImGuiKey key, SDL_GamepadAxis axis, int v0, int v1) {
+    auto analog = [&](ImGuiKey key, int axis, int v0, int v1) {
         float v = 0.0f;
         if (focused) {
-            v = (float)(SDL_GetGamepadAxis(pad, axis) - v0) / (float)(v1 - v0);
+            v = (float)(ps2_gamepad_axis(axis) - v0) / (float)(v1 - v0);
             v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
         }
         io.AddKeyAnalogEvent(key, v > 0.1f, v);
     };
     const int dz = 8000;
-    button(ImGuiKey_GamepadStart, SDL_GAMEPAD_BUTTON_START);
-    button(ImGuiKey_GamepadBack, SDL_GAMEPAD_BUTTON_BACK);
-    button(ImGuiKey_GamepadFaceLeft, SDL_GAMEPAD_BUTTON_WEST);
-    button(ImGuiKey_GamepadFaceRight, SDL_GAMEPAD_BUTTON_EAST);
-    button(ImGuiKey_GamepadFaceUp, SDL_GAMEPAD_BUTTON_NORTH);
-    button(ImGuiKey_GamepadFaceDown, SDL_GAMEPAD_BUTTON_SOUTH);
-    button(ImGuiKey_GamepadDpadLeft, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-    button(ImGuiKey_GamepadDpadRight, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-    button(ImGuiKey_GamepadDpadUp, SDL_GAMEPAD_BUTTON_DPAD_UP);
-    button(ImGuiKey_GamepadDpadDown, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-    button(ImGuiKey_GamepadL1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-    button(ImGuiKey_GamepadR1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
-    button(ImGuiKey_GamepadL3, SDL_GAMEPAD_BUTTON_LEFT_STICK);
-    button(ImGuiKey_GamepadR3, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
-    analog(ImGuiKey_GamepadL2, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 0, 32767);
-    analog(ImGuiKey_GamepadR2, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0, 32767);
-    analog(ImGuiKey_GamepadLStickLeft, SDL_GAMEPAD_AXIS_LEFTX, -dz, -32768);
-    analog(ImGuiKey_GamepadLStickRight, SDL_GAMEPAD_AXIS_LEFTX, +dz, +32767);
-    analog(ImGuiKey_GamepadLStickUp, SDL_GAMEPAD_AXIS_LEFTY, -dz, -32768);
-    analog(ImGuiKey_GamepadLStickDown, SDL_GAMEPAD_AXIS_LEFTY, +dz, +32767);
-    analog(ImGuiKey_GamepadRStickLeft, SDL_GAMEPAD_AXIS_RIGHTX, -dz, -32768);
-    analog(ImGuiKey_GamepadRStickRight, SDL_GAMEPAD_AXIS_RIGHTX, +dz, +32767);
-    analog(ImGuiKey_GamepadRStickUp, SDL_GAMEPAD_AXIS_RIGHTY, -dz, -32768);
-    analog(ImGuiKey_GamepadRStickDown, SDL_GAMEPAD_AXIS_RIGHTY, +dz, +32767);
+    button(ImGuiKey_GamepadStart, PS2_PAD_BUTTON_START);
+    button(ImGuiKey_GamepadBack, PS2_PAD_BUTTON_BACK);
+    button(ImGuiKey_GamepadFaceLeft, PS2_PAD_BUTTON_WEST);
+    button(ImGuiKey_GamepadFaceRight, PS2_PAD_BUTTON_EAST);
+    button(ImGuiKey_GamepadFaceUp, PS2_PAD_BUTTON_NORTH);
+    button(ImGuiKey_GamepadFaceDown, PS2_PAD_BUTTON_SOUTH);
+    button(ImGuiKey_GamepadDpadLeft, PS2_PAD_BUTTON_DPAD_LEFT);
+    button(ImGuiKey_GamepadDpadRight, PS2_PAD_BUTTON_DPAD_RIGHT);
+    button(ImGuiKey_GamepadDpadUp, PS2_PAD_BUTTON_DPAD_UP);
+    button(ImGuiKey_GamepadDpadDown, PS2_PAD_BUTTON_DPAD_DOWN);
+    button(ImGuiKey_GamepadL1, PS2_PAD_BUTTON_LEFT_SHOULDER);
+    button(ImGuiKey_GamepadR1, PS2_PAD_BUTTON_RIGHT_SHOULDER);
+    button(ImGuiKey_GamepadL3, PS2_PAD_BUTTON_LEFT_STICK);
+    button(ImGuiKey_GamepadR3, PS2_PAD_BUTTON_RIGHT_STICK);
+    analog(ImGuiKey_GamepadL2, PS2_PAD_AXIS_LEFT_TRIGGER, 0, 32767);
+    analog(ImGuiKey_GamepadR2, PS2_PAD_AXIS_RIGHT_TRIGGER, 0, 32767);
+    analog(ImGuiKey_GamepadLStickLeft, PS2_PAD_AXIS_LEFTX, -dz, -32768);
+    analog(ImGuiKey_GamepadLStickRight, PS2_PAD_AXIS_LEFTX, +dz, +32767);
+    analog(ImGuiKey_GamepadLStickUp, PS2_PAD_AXIS_LEFTY, -dz, -32768);
+    analog(ImGuiKey_GamepadLStickDown, PS2_PAD_AXIS_LEFTY, +dz, +32767);
+    analog(ImGuiKey_GamepadRStickLeft, PS2_PAD_AXIS_RIGHTX, -dz, -32768);
+    analog(ImGuiKey_GamepadRStickRight, PS2_PAD_AXIS_RIGHTX, +dz, +32767);
+    analog(ImGuiKey_GamepadRStickUp, PS2_PAD_AXIS_RIGHTY, -dz, -32768);
+    analog(ImGuiKey_GamepadRStickDown, PS2_PAD_AXIS_RIGHTY, +dz, +32767);
 }
 
 }
@@ -978,7 +977,7 @@ int ps2_ui_key_event(const ps2_win_event *e) {
     return 0;
 }
 
-int ps2_ui_pad_event(const SDL_Event *e) {
+int ps2_ui_pad_event(const ps2_pad_event *e) {
     if (!g_init || g_cap == CAP_NONE) return 0;
     return capture_pad_event(e) ? 1 : 0;
 }

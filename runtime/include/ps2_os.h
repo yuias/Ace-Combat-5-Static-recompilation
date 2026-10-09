@@ -42,6 +42,13 @@ unsigned long ps2_thread_self_id(void);
 uint64_t ps2_mono_ns(void);                /* monotonic, arbitrary origin */
 void ps2_sleep_ms(unsigned ms);
 
+/* on = 1: a Ctrl+C in the console no longer ends the process; it only sets a
+   flag that ps2_console_quit_take reads. on = 0 restores the default. Any
+   thread. */
+void ps2_console_quit_install(int on);
+/* 1 if Ctrl+C arrived since the last call (and clears it). Any thread. */
+int  ps2_console_quit_take(void);
+
 /* Directory of the running exe with a trailing backslash, in the ANSI code
    page (the encoding narrow fopen expects); "" if unknown. Computed once;
    callable from any thread. */

@@ -126,6 +126,28 @@ void ps2_sleep_ms(unsigned ms)
     Sleep(ms);
 }
 
+/* The handler runs on a thread the console creates, hence the interlocked flag. */
+static volatile LONG console_quit;
+
+static BOOL WINAPI console_handler(DWORD type)
+{
+    /* Only Ctrl+C is taken over; Ctrl+Break and closing the console keep
+       their default. */
+    if (type != CTRL_C_EVENT) return FALSE;
+    InterlockedExchange(&console_quit, 1);
+    return TRUE;
+}
+
+void ps2_console_quit_install(int on)
+{
+    SetConsoleCtrlHandler(console_handler, on ? TRUE : FALSE);
+}
+
+int ps2_console_quit_take(void)
+{
+    return InterlockedExchange(&console_quit, 0) != 0;
+}
+
 static INIT_ONCE exe_dir_once = INIT_ONCE_STATIC_INIT;
 static char exe_dir_buf[1024];
 
