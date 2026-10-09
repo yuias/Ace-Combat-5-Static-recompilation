@@ -27,3 +27,14 @@ subprocess.run([toolchain.cc(), *toolchain.target_flags(), *cxx_flags,
                 str(root / 'runtime/src/ps2_gamepad.cpp'),
                 str(os_obj), '-o', str(hub_exe)], check=True)
 subprocess.run([str(hub_exe)], check=True, timeout=60)
+
+# The hub with the real GameInput backend. Needs the installed runtime; the
+# test reports "skipped" itself when the runtime is missing.
+gi_exe = out / 'gamepad_gi_test.exe'
+subprocess.run([toolchain.cc(), *toolchain.target_flags(), *cxx_flags,
+                str(root / 'tools/gamepad_gi_test.cpp'),
+                str(root / 'runtime/src/ps2_gamepad.cpp'),
+                str(root / 'runtime/src/ps2_gamepad_gi.cpp'),
+                str(os_obj), *toolchain.gameinput_flags(),
+                '-o', str(gi_exe)], check=True)
+subprocess.run([str(gi_exe)], check=True, timeout=60)

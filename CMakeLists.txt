@@ -111,6 +111,8 @@ set(RUNTIME_SOURCES
     runtime/src/ps2_hle_iop.c
     runtime/src/ps2_video.c
     runtime/src/ps2_window.cpp
+    runtime/src/ps2_gamepad.cpp
+    runtime/src/ps2_gamepad_gi.cpp
     runtime/src/ps2_state.c
     runtime/src/ps2_capture.c
     runtime/src/ps2_statecap.c
