@@ -1,6 +1,5 @@
 #include "ps2_runtime.h"
 #include "ps2_settings.h"
-#include <SDL3/SDL.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -28,111 +27,77 @@ void ps2_mmio_w32(u32 a, u32 v) { (void)a; (void)v; abort(); }
 void ps2_mmio_w64(u32 a, u64 v) { (void)a; (void)v; abort(); }
 void ps2_mmio_w128(u32 a, const ps2_reg128 *v) { (void)a; (void)v; abort(); }
 
-/* The key ids are USB HID usages; saved binds rely on them matching SDL's scancodes. */
-_Static_assert(PS2_KEY_A == SDL_SCANCODE_A, "PS2_KEY_A");
-_Static_assert(PS2_KEY_E == SDL_SCANCODE_E, "PS2_KEY_E");
-_Static_assert(PS2_KEY_Q == SDL_SCANCODE_Q, "PS2_KEY_Q");
-_Static_assert(PS2_KEY_S == SDL_SCANCODE_S, "PS2_KEY_S");
-_Static_assert(PS2_KEY_W == SDL_SCANCODE_W, "PS2_KEY_W");
-_Static_assert(PS2_KEY_X == SDL_SCANCODE_X, "PS2_KEY_X");
-_Static_assert(PS2_KEY_Z == SDL_SCANCODE_Z, "PS2_KEY_Z");
-_Static_assert(PS2_KEY_1 == SDL_SCANCODE_1, "PS2_KEY_1");
-_Static_assert(PS2_KEY_3 == SDL_SCANCODE_3, "PS2_KEY_3");
-_Static_assert(PS2_KEY_RETURN == SDL_SCANCODE_RETURN, "PS2_KEY_RETURN");
-_Static_assert(PS2_KEY_ESCAPE == SDL_SCANCODE_ESCAPE, "PS2_KEY_ESCAPE");
-_Static_assert(PS2_KEY_BACKSPACE == SDL_SCANCODE_BACKSPACE, "PS2_KEY_BACKSPACE");
-_Static_assert(PS2_KEY_SPACE == SDL_SCANCODE_SPACE, "PS2_KEY_SPACE");
-_Static_assert(PS2_KEY_F4 == SDL_SCANCODE_F4, "PS2_KEY_F4");
-_Static_assert(PS2_KEY_F6 == SDL_SCANCODE_F6, "PS2_KEY_F6");
-_Static_assert(PS2_KEY_F7 == SDL_SCANCODE_F7, "PS2_KEY_F7");
-_Static_assert(PS2_KEY_F8 == SDL_SCANCODE_F8, "PS2_KEY_F8");
-_Static_assert(PS2_KEY_F9 == SDL_SCANCODE_F9, "PS2_KEY_F9");
-_Static_assert(PS2_KEY_F10 == SDL_SCANCODE_F10, "PS2_KEY_F10");
-_Static_assert(PS2_KEY_F11 == SDL_SCANCODE_F11, "PS2_KEY_F11");
-_Static_assert(PS2_KEY_DELETE == SDL_SCANCODE_DELETE, "PS2_KEY_DELETE");
-_Static_assert(PS2_KEY_RIGHT == SDL_SCANCODE_RIGHT, "PS2_KEY_RIGHT");
-_Static_assert(PS2_KEY_LEFT == SDL_SCANCODE_LEFT, "PS2_KEY_LEFT");
-_Static_assert(PS2_KEY_DOWN == SDL_SCANCODE_DOWN, "PS2_KEY_DOWN");
-_Static_assert(PS2_KEY_UP == SDL_SCANCODE_UP, "PS2_KEY_UP");
-_Static_assert(PS2_KEY_KP_2 == SDL_SCANCODE_KP_2, "PS2_KEY_KP_2");
-_Static_assert(PS2_KEY_KP_4 == SDL_SCANCODE_KP_4, "PS2_KEY_KP_4");
-_Static_assert(PS2_KEY_KP_6 == SDL_SCANCODE_KP_6, "PS2_KEY_KP_6");
-_Static_assert(PS2_KEY_KP_8 == SDL_SCANCODE_KP_8, "PS2_KEY_KP_8");
-_Static_assert(PS2_KEY_RSHIFT == SDL_SCANCODE_RSHIFT, "PS2_KEY_RSHIFT");
-_Static_assert(PS2_KEY_COUNT == SDL_SCANCODE_COUNT, "PS2_KEY_COUNT");
+/* The key ids are USB HID usages, the numbering saved binds were made with. */
+_Static_assert(PS2_KEY_A == 4, "PS2_KEY_A");
+_Static_assert(PS2_KEY_E == 8, "PS2_KEY_E");
+_Static_assert(PS2_KEY_Q == 20, "PS2_KEY_Q");
+_Static_assert(PS2_KEY_S == 22, "PS2_KEY_S");
+_Static_assert(PS2_KEY_W == 26, "PS2_KEY_W");
+_Static_assert(PS2_KEY_X == 27, "PS2_KEY_X");
+_Static_assert(PS2_KEY_Z == 29, "PS2_KEY_Z");
+_Static_assert(PS2_KEY_1 == 30, "PS2_KEY_1");
+_Static_assert(PS2_KEY_3 == 32, "PS2_KEY_3");
+_Static_assert(PS2_KEY_RETURN == 40, "PS2_KEY_RETURN");
+_Static_assert(PS2_KEY_ESCAPE == 41, "PS2_KEY_ESCAPE");
+_Static_assert(PS2_KEY_BACKSPACE == 42, "PS2_KEY_BACKSPACE");
+_Static_assert(PS2_KEY_SPACE == 44, "PS2_KEY_SPACE");
+_Static_assert(PS2_KEY_F4 == 61, "PS2_KEY_F4");
+_Static_assert(PS2_KEY_F6 == 63, "PS2_KEY_F6");
+_Static_assert(PS2_KEY_F7 == 64, "PS2_KEY_F7");
+_Static_assert(PS2_KEY_F8 == 65, "PS2_KEY_F8");
+_Static_assert(PS2_KEY_F9 == 66, "PS2_KEY_F9");
+_Static_assert(PS2_KEY_F10 == 67, "PS2_KEY_F10");
+_Static_assert(PS2_KEY_F11 == 68, "PS2_KEY_F11");
+_Static_assert(PS2_KEY_DELETE == 76, "PS2_KEY_DELETE");
+_Static_assert(PS2_KEY_RIGHT == 79, "PS2_KEY_RIGHT");
+_Static_assert(PS2_KEY_LEFT == 80, "PS2_KEY_LEFT");
+_Static_assert(PS2_KEY_DOWN == 81, "PS2_KEY_DOWN");
+_Static_assert(PS2_KEY_UP == 82, "PS2_KEY_UP");
+_Static_assert(PS2_KEY_KP_2 == 90, "PS2_KEY_KP_2");
+_Static_assert(PS2_KEY_KP_4 == 92, "PS2_KEY_KP_4");
+_Static_assert(PS2_KEY_KP_6 == 94, "PS2_KEY_KP_6");
+_Static_assert(PS2_KEY_KP_8 == 96, "PS2_KEY_KP_8");
+_Static_assert(PS2_KEY_RSHIFT == 229, "PS2_KEY_RSHIFT");
+_Static_assert(PS2_KEY_COUNT == 512, "PS2_KEY_COUNT");
 
-/* The pad ids are the numbering older builds stored; check it against SDL while SDL is still here. */
+/* The pad ids are the numbering older builds stored. */
 _Static_assert(PS2_PAD_BUTTON_SOUTH == 0, "PS2_PAD_BUTTON_SOUTH");
-_Static_assert(PS2_PAD_BUTTON_SOUTH == SDL_GAMEPAD_BUTTON_SOUTH, "PS2_PAD_BUTTON_SOUTH vs SDL");
 _Static_assert(PS2_PAD_BUTTON_EAST == 1, "PS2_PAD_BUTTON_EAST");
-_Static_assert(PS2_PAD_BUTTON_EAST == SDL_GAMEPAD_BUTTON_EAST, "PS2_PAD_BUTTON_EAST vs SDL");
 _Static_assert(PS2_PAD_BUTTON_WEST == 2, "PS2_PAD_BUTTON_WEST");
-_Static_assert(PS2_PAD_BUTTON_WEST == SDL_GAMEPAD_BUTTON_WEST, "PS2_PAD_BUTTON_WEST vs SDL");
 _Static_assert(PS2_PAD_BUTTON_NORTH == 3, "PS2_PAD_BUTTON_NORTH");
-_Static_assert(PS2_PAD_BUTTON_NORTH == SDL_GAMEPAD_BUTTON_NORTH, "PS2_PAD_BUTTON_NORTH vs SDL");
 _Static_assert(PS2_PAD_BUTTON_BACK == 4, "PS2_PAD_BUTTON_BACK");
-_Static_assert(PS2_PAD_BUTTON_BACK == SDL_GAMEPAD_BUTTON_BACK, "PS2_PAD_BUTTON_BACK vs SDL");
 _Static_assert(PS2_PAD_BUTTON_GUIDE == 5, "PS2_PAD_BUTTON_GUIDE");
-_Static_assert(PS2_PAD_BUTTON_GUIDE == SDL_GAMEPAD_BUTTON_GUIDE, "PS2_PAD_BUTTON_GUIDE vs SDL");
 _Static_assert(PS2_PAD_BUTTON_START == 6, "PS2_PAD_BUTTON_START");
-_Static_assert(PS2_PAD_BUTTON_START == SDL_GAMEPAD_BUTTON_START, "PS2_PAD_BUTTON_START vs SDL");
 _Static_assert(PS2_PAD_BUTTON_LEFT_STICK == 7, "PS2_PAD_BUTTON_LEFT_STICK");
-_Static_assert(PS2_PAD_BUTTON_LEFT_STICK == SDL_GAMEPAD_BUTTON_LEFT_STICK, "PS2_PAD_BUTTON_LEFT_STICK vs SDL");
 _Static_assert(PS2_PAD_BUTTON_RIGHT_STICK == 8, "PS2_PAD_BUTTON_RIGHT_STICK");
-_Static_assert(PS2_PAD_BUTTON_RIGHT_STICK == SDL_GAMEPAD_BUTTON_RIGHT_STICK, "PS2_PAD_BUTTON_RIGHT_STICK vs SDL");
 _Static_assert(PS2_PAD_BUTTON_LEFT_SHOULDER == 9, "PS2_PAD_BUTTON_LEFT_SHOULDER");
-_Static_assert(PS2_PAD_BUTTON_LEFT_SHOULDER == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, "PS2_PAD_BUTTON_LEFT_SHOULDER vs SDL");
 _Static_assert(PS2_PAD_BUTTON_RIGHT_SHOULDER == 10, "PS2_PAD_BUTTON_RIGHT_SHOULDER");
-_Static_assert(PS2_PAD_BUTTON_RIGHT_SHOULDER == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, "PS2_PAD_BUTTON_RIGHT_SHOULDER vs SDL");
 _Static_assert(PS2_PAD_BUTTON_DPAD_UP == 11, "PS2_PAD_BUTTON_DPAD_UP");
-_Static_assert(PS2_PAD_BUTTON_DPAD_UP == SDL_GAMEPAD_BUTTON_DPAD_UP, "PS2_PAD_BUTTON_DPAD_UP vs SDL");
 _Static_assert(PS2_PAD_BUTTON_DPAD_DOWN == 12, "PS2_PAD_BUTTON_DPAD_DOWN");
-_Static_assert(PS2_PAD_BUTTON_DPAD_DOWN == SDL_GAMEPAD_BUTTON_DPAD_DOWN, "PS2_PAD_BUTTON_DPAD_DOWN vs SDL");
 _Static_assert(PS2_PAD_BUTTON_DPAD_LEFT == 13, "PS2_PAD_BUTTON_DPAD_LEFT");
-_Static_assert(PS2_PAD_BUTTON_DPAD_LEFT == SDL_GAMEPAD_BUTTON_DPAD_LEFT, "PS2_PAD_BUTTON_DPAD_LEFT vs SDL");
 _Static_assert(PS2_PAD_BUTTON_DPAD_RIGHT == 14, "PS2_PAD_BUTTON_DPAD_RIGHT");
-_Static_assert(PS2_PAD_BUTTON_DPAD_RIGHT == SDL_GAMEPAD_BUTTON_DPAD_RIGHT, "PS2_PAD_BUTTON_DPAD_RIGHT vs SDL");
 _Static_assert(PS2_PAD_BUTTON_MISC1 == 15, "PS2_PAD_BUTTON_MISC1");
-_Static_assert(PS2_PAD_BUTTON_MISC1 == SDL_GAMEPAD_BUTTON_MISC1, "PS2_PAD_BUTTON_MISC1 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_RIGHT_PADDLE1 == 16, "PS2_PAD_BUTTON_RIGHT_PADDLE1");
-_Static_assert(PS2_PAD_BUTTON_RIGHT_PADDLE1 == SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1, "PS2_PAD_BUTTON_RIGHT_PADDLE1 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_LEFT_PADDLE1 == 17, "PS2_PAD_BUTTON_LEFT_PADDLE1");
-_Static_assert(PS2_PAD_BUTTON_LEFT_PADDLE1 == SDL_GAMEPAD_BUTTON_LEFT_PADDLE1, "PS2_PAD_BUTTON_LEFT_PADDLE1 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_RIGHT_PADDLE2 == 18, "PS2_PAD_BUTTON_RIGHT_PADDLE2");
-_Static_assert(PS2_PAD_BUTTON_RIGHT_PADDLE2 == SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2, "PS2_PAD_BUTTON_RIGHT_PADDLE2 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_LEFT_PADDLE2 == 19, "PS2_PAD_BUTTON_LEFT_PADDLE2");
-_Static_assert(PS2_PAD_BUTTON_LEFT_PADDLE2 == SDL_GAMEPAD_BUTTON_LEFT_PADDLE2, "PS2_PAD_BUTTON_LEFT_PADDLE2 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_TOUCHPAD == 20, "PS2_PAD_BUTTON_TOUCHPAD");
-_Static_assert(PS2_PAD_BUTTON_TOUCHPAD == SDL_GAMEPAD_BUTTON_TOUCHPAD, "PS2_PAD_BUTTON_TOUCHPAD vs SDL");
 _Static_assert(PS2_PAD_BUTTON_MISC2 == 21, "PS2_PAD_BUTTON_MISC2");
-_Static_assert(PS2_PAD_BUTTON_MISC2 == SDL_GAMEPAD_BUTTON_MISC2, "PS2_PAD_BUTTON_MISC2 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_MISC3 == 22, "PS2_PAD_BUTTON_MISC3");
-_Static_assert(PS2_PAD_BUTTON_MISC3 == SDL_GAMEPAD_BUTTON_MISC3, "PS2_PAD_BUTTON_MISC3 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_MISC4 == 23, "PS2_PAD_BUTTON_MISC4");
-_Static_assert(PS2_PAD_BUTTON_MISC4 == SDL_GAMEPAD_BUTTON_MISC4, "PS2_PAD_BUTTON_MISC4 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_MISC5 == 24, "PS2_PAD_BUTTON_MISC5");
-_Static_assert(PS2_PAD_BUTTON_MISC5 == SDL_GAMEPAD_BUTTON_MISC5, "PS2_PAD_BUTTON_MISC5 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_MISC6 == 25, "PS2_PAD_BUTTON_MISC6");
-_Static_assert(PS2_PAD_BUTTON_MISC6 == SDL_GAMEPAD_BUTTON_MISC6, "PS2_PAD_BUTTON_MISC6 vs SDL");
 _Static_assert(PS2_PAD_BUTTON_COUNT == 26, "PS2_PAD_BUTTON_COUNT");
-_Static_assert(PS2_PAD_BUTTON_COUNT == SDL_GAMEPAD_BUTTON_COUNT, "PS2_PAD_BUTTON_COUNT vs SDL");
 _Static_assert(PS2_PAD_AXIS_LEFTX == 0, "PS2_PAD_AXIS_LEFTX");
-_Static_assert(PS2_PAD_AXIS_LEFTX == SDL_GAMEPAD_AXIS_LEFTX, "PS2_PAD_AXIS_LEFTX vs SDL");
 _Static_assert(PS2_PAD_AXIS_LEFTY == 1, "PS2_PAD_AXIS_LEFTY");
-_Static_assert(PS2_PAD_AXIS_LEFTY == SDL_GAMEPAD_AXIS_LEFTY, "PS2_PAD_AXIS_LEFTY vs SDL");
 _Static_assert(PS2_PAD_AXIS_RIGHTX == 2, "PS2_PAD_AXIS_RIGHTX");
-_Static_assert(PS2_PAD_AXIS_RIGHTX == SDL_GAMEPAD_AXIS_RIGHTX, "PS2_PAD_AXIS_RIGHTX vs SDL");
 _Static_assert(PS2_PAD_AXIS_RIGHTY == 3, "PS2_PAD_AXIS_RIGHTY");
-_Static_assert(PS2_PAD_AXIS_RIGHTY == SDL_GAMEPAD_AXIS_RIGHTY, "PS2_PAD_AXIS_RIGHTY vs SDL");
 _Static_assert(PS2_PAD_AXIS_LEFT_TRIGGER == 4, "PS2_PAD_AXIS_LEFT_TRIGGER");
-_Static_assert(PS2_PAD_AXIS_LEFT_TRIGGER == SDL_GAMEPAD_AXIS_LEFT_TRIGGER, "PS2_PAD_AXIS_LEFT_TRIGGER vs SDL");
 _Static_assert(PS2_PAD_AXIS_RIGHT_TRIGGER == 5, "PS2_PAD_AXIS_RIGHT_TRIGGER");
-_Static_assert(PS2_PAD_AXIS_RIGHT_TRIGGER == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, "PS2_PAD_AXIS_RIGHT_TRIGGER vs SDL");
 _Static_assert(PS2_PAD_AXIS_COUNT == 6, "PS2_PAD_AXIS_COUNT");
-_Static_assert(PS2_PAD_AXIS_COUNT == SDL_GAMEPAD_AXIS_COUNT, "PS2_PAD_AXIS_COUNT vs SDL");
 
 /* Every key id ps2_key_from_scancode can return, with the name the menu and the settings
-   file show. Generated once from SDL_GetScancodeName; "Unknown key" where SDL has no name. */
+   file show; "Unknown key" where the id has no name. */
 static const struct { int id; const char *name; } expected_keys[] = {
         { 4, "A" },
         { 5, "B" },
@@ -391,15 +356,9 @@ int main(void) {
             CHECK(listed, "key %d is reachable but missing from the expected table", k);
         }
         for (int i = 0; i < n_expected_keys; i++) {
-            const char *sdl, *want;
             const int k = expected_keys[i].id;
             CHECK(!strcmp(ps2_key_name(k), expected_keys[i].name), "key %d is named \"%s\", expected \"%s\"",
                   k, ps2_key_name(k), expected_keys[i].name);
-            /* Temporary cross-check while SDL is still linked; the table is the reference afterwards. */
-            sdl = SDL_GetScancodeName((SDL_Scancode)k);
-            want = sdl && *sdl ? sdl : "Unknown key";
-            CHECK(!strcmp(expected_keys[i].name, want), "expected name \"%s\" for key %d, SDL says \"%s\"",
-                  expected_keys[i].name, k, want);
         }
         printf("keys: %d reachable ids checked against the expected names\n", nreached);
     }

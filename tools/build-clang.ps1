@@ -4,8 +4,8 @@
 # Needs LLVM clang 19 or newer on PATH (GNU-style clang driver, not clang-cl),
 # Visual Studio 2022 or newer (or its Build Tools) with the C++ x64 tools and
 # a Windows SDK, and the Vulkan SDK. The script enters the Visual Studio developer
-# environment itself. The SDL3 VC devel package and the Microsoft.GameInput
-# package are downloaded into deps/ (git-ignored) on first run.
+# environment itself. The Microsoft.GameInput package is
+# downloaded into deps/ (git-ignored) on first run.
 
 [CmdletBinding()]
 param(
@@ -16,29 +16,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$SdlVersion = '3.4.18'
 $GameInputVersion = '3.5.283'
 # SHA-256 of microsoft.gameinput.<version>.nupkg as api.nuget.org serves it.
 $GameInputSha256 = 'b5988cb8ff9d7009b6ddf6ad4e3ff87e91b00cc17ffcd5d628dabc21c208f100'
 
 $root = Split-Path -Parent $PSScriptRoot
 $deps = Join-Path $root 'deps'
-# Own folder: the mingw and VC zips both unpack to SDL3-<version>/.
-$sdlDeps = Join-Path $deps 'sdl3-vc'
-$sdl = Join-Path $sdlDeps "SDL3-$SdlVersion"
 $gameInput = Join-Path $deps "gameinput\$GameInputVersion"
-
-function Get-Zip([string]$url, [string]$destDir, [string]$check) {
-  if (Test-Path $check) { return }
-  New-Item -ItemType Directory -Force $destDir | Out-Null
-  $zip = Join-Path $destDir (Split-Path -Leaf $url)
-  Write-Host "downloading $url"
-  Invoke-WebRequest $url -OutFile $zip
-  Expand-Archive $zip -DestinationPath $destDir -Force
-  Remove-Item $zip
-}
-
-Get-Zip "https://github.com/libsdl-org/SDL/releases/download/release-$SdlVersion/SDL3-devel-$SdlVersion-VC.zip" $sdlDeps "$sdl/cmake/SDL3Config.cmake"
 
 # .NET instead of Get-FileHash: that cmdlet fails to load when PSModulePath
 # lists PowerShell 7 module folders ahead of Windows PowerShell's own.
@@ -150,14 +134,11 @@ if ((Test-Path $cache) -and -not (Select-String -Path $cache -Quiet -Pattern '^C
   "-DCMAKE_CXX_COMPILER=$bin/clang++.exe" `
   -DCMAKE_C_COMPILER_TARGET=x86_64-pc-windows-msvc `
   -DCMAKE_CXX_COMPILER_TARGET=x86_64-pc-windows-msvc `
-  "-DSDL3_DIR=$sdl/cmake" `
   "-DPS2_GAMEINPUT_DIR=$($gameInput -replace '\\','/')" @CMakeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cmake --build $out
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# SDL3.dll next to the exe, so it starts from anywhere; the C runtime is
-# linked statically. Remove the DLL an llvm-mingw build left here.
-Copy-Item "$sdl/lib/x64/SDL3.dll" $out -Force
-Remove-Item (Join-Path $out 'libwinpthread-1.dll') -Force -ErrorAction SilentlyContinue
+# Nothing is linked dynamically; remove DLLs that older builds left here.
+Remove-Item (Join-Path $out '*.dll') -Force -ErrorAction SilentlyContinue
 Write-Host "built $out/ac5.exe"

@@ -1,6 +1,5 @@
 from pathlib import Path
 import os
-import shutil
 import subprocess
 import sys
 
@@ -20,9 +19,7 @@ subprocess.run([toolchain.cc(), *toolchain.target_flags(),
                 str(root / 'tools/settings_test.c'),
                 str(root / 'runtime/src/ps2_settings.c'),
                 str(root / 'runtime/src/ps2_os.c'),
-                *toolchain.sdl3_flags(), '-o', str(exe)], check=True)
-if toolchain.sdl3_dll():
-    shutil.copy(toolchain.sdl3_dll(), out)
+                '-o', str(exe)], check=True)
 if ini.exists():
     ini.unlink()
 subprocess.run([str(exe)], check=True, env=dict(os.environ, PS2_SETTINGS_FILE=str(ini)))

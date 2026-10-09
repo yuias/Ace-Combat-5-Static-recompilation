@@ -37,8 +37,6 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O2")
 option(PS2_DIAG "compile the entry histogram and the guest-store watch in" OFF)
 
 find_package(Vulkan REQUIRED)
-# The SDL3 VC devel package from tools/build-clang.ps1 (-DSDL3_DIR=...).
-find_package(SDL3 CONFIG REQUIRED)
 
 # The Microsoft.GameInput package from tools/build-clang.ps1
 # (-DPS2_GAMEINPUT_DIR=...): its v3 header and its static loader, which finds
@@ -177,7 +175,7 @@ target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
 # SYSTEM: searched before the Windows SDK's older GameInput.h, and the
 # header's warnings are not ours.
 target_include_directories(ac5 SYSTEM PRIVATE "${PS2_GAMEINPUT_DIR}/native/include")
-target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan "${GAMEINPUT_LIB}" lua54 ole32 avrt user32 imm32 gdi32 dwmapi)
+target_link_libraries(ac5 PRIVATE Vulkan::Vulkan "${GAMEINPUT_LIB}" lua54 ole32 avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
@@ -224,7 +222,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                             ${Vulkan_INCLUDE_DIRS})
 target_include_directories(gsreplay SYSTEM PRIVATE "${PS2_GAMEINPUT_DIR}/native/include")
-target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan "${GAMEINPUT_LIB}" ole32 avrt user32 imm32 gdi32 dwmapi)
+target_link_libraries(gsreplay PRIVATE Vulkan::Vulkan "${GAMEINPUT_LIB}" ole32 avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)
