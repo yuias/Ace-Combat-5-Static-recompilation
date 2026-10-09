@@ -120,7 +120,7 @@ You can start `ac5.exe` from outside the terminal too (double-clicking it in Exp
 Where your stuff goes:
 
 - Saves are written to a `saves` folder inside whatever folder you started the game from. The memory card files get created the first time the game touches them. Set `PS2_SAVE_DIR` if you want them somewhere else. These are this runtime's own format, not PCSX2 memory cards, so you can't bring saves over from an emulator.
-- Settings are saved to `ac5_settings.ini` next to `ac5.exe`.
+- Settings are saved to `ac5_settings.ini` next to `ac5.exe`. The settings menu offers windowed and borderless fullscreen; a settings file from an older build that chose exclusive fullscreen opens borderless.
 - Compiled graphics pipelines are cached in `ac5_pipelines.cache` and `ac5_pipelines.keys` next to `ac5.exe`, so a state that was compiled once doesn't cause a stutter the next time it shows up. Deleting them is harmless, they just get rebuilt.
 
 ### Controls
@@ -143,7 +143,7 @@ You can rebind all of it in the settings menu.
 Other keys:
 
 - **F4** opens and closes the settings menu
-- **F11** or **Alt+Enter** toggles fullscreen
+- **F11** or **Alt+Enter** toggles borderless fullscreen
 - **Esc** quits, or closes the settings menu if it's open
 - **F6 to F10** are debugging hotkeys (captures and state dumps), you can ignore them
 
