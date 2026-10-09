@@ -13,8 +13,21 @@ out = root / 'out' / 'vfs_test'
 work = out / 'work'
 work.mkdir(parents=True, exist_ok=True)
 exe = out / 'vfs_test.exe'
-tree = Path(paths.DISC)
-iso = Path(str(tree) + '.iso')
+# AC5_DISC may name the extracted disc folder or a disc image; with a folder,
+# a same-named .iso next to it is checked too.
+disc = Path(paths.DISC)
+if disc.suffix.lower() == '.iso':
+    tree, iso = None, disc
+else:
+    tree, iso = disc, Path(str(disc) + '.iso')
+if tree is not None and not tree.is_dir():
+    tree = None
+if not iso.is_file():
+    iso = None
+if tree is None and iso is None:
+    raise SystemExit('no disc at %s; set AC5_DISC to the extracted disc folder '
+                     'or to the .iso' % disc)
+images = [p for p in (tree, iso) if p is not None]
 names = Path(paths.region_config('pac_names.txt'))
 
 subprocess.run([toolchain.cc(), *toolchain.target_flags(),
@@ -38,9 +51,8 @@ def run(*args):
     return r.stdout
 
 
-run('identity', tree)
-if iso.exists():
-    run('identity', iso)
+for image in images:
+    run('identity', image)
 
 def pattern(seed, n):
     return bytes((seed * 31 + i * 7) & 0xFF for i in range(n))
@@ -60,15 +72,14 @@ files = {
 }
 for name, data in files.items():
     (work / name).write_bytes(data)
-(work / 'tbl.bin').write_bytes((tree / 'BIN' / 'DATA.TBL').read_bytes())
+run('cat', images[0], 'BIN/DATA.TBL', work / 'tbl.bin')
 
 light = [line.split()[0] for line in names.read_text().splitlines()
          if line.endswith(' mistitle/backlight.gim')]
-run('mods', tree, work, light[3])
-if iso.exists():
-    run('mods', iso, work, light[3])
+for image in images:
+    run('mods', image, work, light[3])
 
-if iso.exists():
+if tree is not None and iso is not None:
     probe = ['BIN/DATA.TBL', 'BIN/DATA.PAC', 'BIN/US/BGM.PAC', 'SYSTEM.CNF',
              'SLUS_208.51']
     a = run('digest', tree, *probe)
@@ -78,5 +89,5 @@ if iso.exists():
     print('digest: .iso and tree agree on %d files and %d members'
           % (len(probe), a.count('member ')))
 else:
-    print('digest: no %s, image comparison skipped' % iso.name)
+    print('digest: only %s, image comparison skipped' % images[0].name)
 print('vfs: all checks passed')
