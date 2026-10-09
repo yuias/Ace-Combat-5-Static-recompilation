@@ -4,8 +4,8 @@
 # Needs LLVM clang 19 or newer on PATH (GNU-style clang driver, not clang-cl),
 # Visual Studio 2022 or newer (or its Build Tools) with the C++ x64 tools and
 # a Windows SDK, and the Vulkan SDK. The script enters the Visual Studio developer
-# environment itself. The SDL3 VC devel package is downloaded into deps/
-# (git-ignored) on first run.
+# environment itself. The SDL3 VC devel package and the Microsoft.GameInput
+# package are downloaded into deps/ (git-ignored) on first run.
 
 [CmdletBinding()]
 param(
@@ -17,12 +17,16 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $SdlVersion = '3.4.18'
+$GameInputVersion = '3.5.283'
+# SHA-256 of microsoft.gameinput.<version>.nupkg as api.nuget.org serves it.
+$GameInputSha256 = 'b5988cb8ff9d7009b6ddf6ad4e3ff87e91b00cc17ffcd5d628dabc21c208f100'
 
 $root = Split-Path -Parent $PSScriptRoot
 $deps = Join-Path $root 'deps'
 # Own folder: the mingw and VC zips both unpack to SDL3-<version>/.
 $sdlDeps = Join-Path $deps 'sdl3-vc'
 $sdl = Join-Path $sdlDeps "SDL3-$SdlVersion"
+$gameInput = Join-Path $deps "gameinput\$GameInputVersion"
 
 function Get-Zip([string]$url, [string]$destDir, [string]$check) {
   if (Test-Path $check) { return }
@@ -35,6 +39,51 @@ function Get-Zip([string]$url, [string]$destDir, [string]$check) {
 }
 
 Get-Zip "https://github.com/libsdl-org/SDL/releases/download/release-$SdlVersion/SDL3-devel-$SdlVersion-VC.zip" $sdlDeps "$sdl/cmake/SDL3Config.cmake"
+
+# .NET instead of Get-FileHash: that cmdlet fails to load when PSModulePath
+# lists PowerShell 7 module folders ahead of Windows PowerShell's own.
+function Get-Sha256([string]$path) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($path)
+  try { $bytes = $sha.ComputeHash($stream) } finally { $stream.Dispose(); $sha.Dispose() }
+  return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+function Get-GameInput {
+  $marker = Join-Path $gameInput '.verified-sha256'
+  if ((Test-Path $marker) -and ((Get-Content $marker -Raw).Trim() -eq $GameInputSha256)) { return }
+  $gameInputRoot = Join-Path $deps 'gameinput'
+  $downloadDir = Join-Path $gameInputRoot 'download'
+  New-Item -ItemType Directory -Force $downloadDir | Out-Null
+  # A nupkg is a zip; the archive tools of Windows PowerShell 5.1 reject other extensions.
+  $zip = Join-Path $downloadDir "microsoft.gameinput.$GameInputVersion.zip"
+  $cached = (Test-Path $zip) -and ((Get-Sha256 $zip) -eq $GameInputSha256)
+  if (-not $cached) {
+    $url = "https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/$GameInputVersion/microsoft.gameinput.$GameInputVersion.nupkg"
+    $part = "$zip.part"
+    Write-Host "downloading $url"
+    Invoke-WebRequest $url -OutFile $part
+    $hash = (Get-Sha256 $part)
+    if ($hash -ne $GameInputSha256) {
+      Remove-Item $part -Force
+      throw "GameInput package SHA-256 mismatch: expected $GameInputSha256, got $hash"
+    }
+    Move-Item $part $zip -Force
+  }
+  # Expand-Archive mishandles the package's [Content_Types].xml.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $staging = Join-Path $gameInputRoot '.staging'
+  if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $staging)
+  foreach ($need in 'native\include\GameInput.h', 'native\lib\x64\GameInput.lib', 'redist\GameInputRedist.msi') {
+    if (-not (Test-Path (Join-Path $staging $need))) { throw "the GameInput package has no $need" }
+  }
+  if (Test-Path $gameInput) { Remove-Item $gameInput -Recurse -Force }
+  Move-Item $staging $gameInput
+  [System.IO.File]::WriteAllText($marker, $GameInputSha256)
+}
+
+Get-GameInput
 
 # A terminal opened before the SDK install has no VULKAN_SDK; read the
 # machine-wide value instead.
@@ -101,7 +150,8 @@ if ((Test-Path $cache) -and -not (Select-String -Path $cache -Quiet -Pattern '^C
   "-DCMAKE_CXX_COMPILER=$bin/clang++.exe" `
   -DCMAKE_C_COMPILER_TARGET=x86_64-pc-windows-msvc `
   -DCMAKE_CXX_COMPILER_TARGET=x86_64-pc-windows-msvc `
-  "-DSDL3_DIR=$sdl/cmake" @CMakeArgs
+  "-DSDL3_DIR=$sdl/cmake" `
+  "-DPS2_GAMEINPUT_DIR=$($gameInput -replace '\\','/')" @CMakeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cmake --build $out
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

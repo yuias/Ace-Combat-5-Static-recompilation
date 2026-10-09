@@ -40,6 +40,20 @@ find_package(Vulkan REQUIRED)
 # The SDL3 VC devel package from tools/build-clang.ps1 (-DSDL3_DIR=...).
 find_package(SDL3 CONFIG REQUIRED)
 
+# The Microsoft.GameInput package from tools/build-clang.ps1
+# (-DPS2_GAMEINPUT_DIR=...): its v3 header and its static loader, which finds
+# the installed GameInput runtime when the game starts. Nothing from it is
+# copied next to the exe.
+set(PS2_GAMEINPUT_DIR "" CACHE PATH "extracted Microsoft.GameInput package")
+foreach(_gi native/include/GameInput.h native/lib/x64/GameInput.lib)
+  if(NOT EXISTS "${PS2_GAMEINPUT_DIR}/${_gi}")
+    message(FATAL_ERROR "${PS2_GAMEINPUT_DIR}/${_gi} not found. Build with "
+            "tools/build-clang.ps1, which downloads the GameInput package.")
+  endif()
+endforeach()
+# By full path: the Windows SDK has an import library of the same name.
+set(GAMEINPUT_LIB "${PS2_GAMEINPUT_DIR}/native/lib/x64/GameInput.lib")
+
 set(PS2_GENERATED_DIR "generated" CACHE STRING
     "recompiler output directory, relative to the source tree")
 set(GEN_DIR "${CMAKE_SOURCE_DIR}/${PS2_GENERATED_DIR}")
@@ -158,7 +172,10 @@ add_executable(ac5 ${RUNTIME_SOURCES} ${GENERATED_SOURCES})
 target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
                                        ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                        ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan lua54 ole32 avrt user32 imm32 gdi32 dwmapi)
+# SYSTEM: searched before the Windows SDK's older GameInput.h, and the
+# header's warnings are not ours.
+target_include_directories(ac5 SYSTEM PRIVATE "${PS2_GAMEINPUT_DIR}/native/include")
+target_link_libraries(ac5 PRIVATE SDL3::SDL3 Vulkan::Vulkan "${GAMEINPUT_LIB}" lua54 ole32 avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
@@ -204,7 +221,8 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             "${LUA_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                             ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan ole32 avrt user32 imm32 gdi32 dwmapi)
+target_include_directories(gsreplay SYSTEM PRIVATE "${PS2_GAMEINPUT_DIR}/native/include")
+target_link_libraries(gsreplay PRIVATE SDL3::SDL3 Vulkan::Vulkan "${GAMEINPUT_LIB}" ole32 avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)

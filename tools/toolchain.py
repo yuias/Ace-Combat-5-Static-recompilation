@@ -51,3 +51,19 @@ def sdl3_dll():
     sdl = _sdl3_root()
     dll = sdl and os.path.join(sdl, "lib", "x64", "SDL3.dll")
     return dll if dll and os.path.exists(dll) else None
+
+
+def gameinput_root():
+    """Newest verified deps/gameinput/<version>, or None."""
+    hits = sorted(glob.glob(os.path.join(DEPS, "gameinput", "*", ".verified-sha256")))
+    return os.path.dirname(hits[-1]) if hits else None
+
+
+def gameinput_flags():
+    """Compile and link flags for GameInput: the package's v3 header and its static loader."""
+    root = gameinput_root()
+    if not root:
+        raise SystemExit("the GameInput package is missing; run tools/build-clang.ps1 first")
+    # The loader library is passed by path: the Windows SDK has an import library of the same name.
+    return ["-isystem", os.path.join(root, "native", "include"),
+            os.path.join(root, "native", "lib", "x64", "GameInput.lib")]
