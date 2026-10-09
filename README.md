@@ -16,7 +16,7 @@ There's no game code or assets in this repo. You bring your own copy of the game
 - **64-bit Windows** and a GPU with a Vulkan driver. I build and play on Windows 10.
 - **LLVM clang** 19 or newer on `PATH`, from the [LLVM installer](https://github.com/llvm/llvm-project/releases), `winget install LLVM.LLVM` or scoop's `llvm`. The build uses the GNU-style `clang` driver, not `clang-cl`. The generated code relies on guaranteed tail calls (`musttail`), which Clang provides.
 - **Visual Studio 2022 or newer** (or its Build Tools) with the "Desktop development with C++" workload, for the MSVC x64 libraries and a Windows SDK. You don't need to open a developer prompt: the build script enters the environment of the newest one installed.
-- **SDL3** you don't install yourself: the build script in step 4 downloads the SDL3 VC development package into `deps/` (git-ignored) the first time it runs. If you built this before, the old `deps/llvm-mingw-*` folder is no longer used and can be deleted.
+- **GameInput**, Microsoft's input API, for controllers. The build script in step 4 downloads Microsoft's `Microsoft.GameInput` NuGet package (the header and a static loader library, SHA-256 checked) into `deps/` (git-ignored) the first time it runs. To use a controller, install the GameInput runtime once by running `deps/gameinput/3.5.283/redist/GameInputRedist.msi`. Without it the game runs keyboard-only and logs `pad: GameInput unavailable: ...`. Don't copy `GameInputRedist.dll` next to `ac5.exe`, that hides Xbox controllers. The build only needs `deps/gameinput`; other `deps/` subfolders from earlier builds can be deleted.
 - **CMake** 3.20 or newer, and **Ninja** (`pip install ninja` is the easiest way to get it).
 - **The [Vulkan SDK](https://vulkan.lunarg.com)**. The build uses its `glslc` to compile the shaders.
 - **Python 3.** Only the standard library is used, there's nothing to pip install. I'm on 3.12.
@@ -87,9 +87,9 @@ If you want to actually read the output, add `--comments`. Every line then gets 
 powershell -ExecutionPolicy Bypass -File tools/build-clang.ps1
 ```
 
-On the first run this downloads SDL3 into `deps/`, then configures and builds into `build/clang`. Extra arguments are passed on to the CMake configure step, for example `-DPS2_DIAG=ON`.
+On the first run this downloads the GameInput package into `deps/`, then configures and builds into `build/clang`. Extra arguments are passed on to the CMake configure step, for example `-DPS2_DIAG=ON`.
 
-The shaders get compiled into a `shaders` folder right next to `ac5.exe`, and that's where the game looks for them. If you ever move the exe somewhere else, take that folder with it. The script also copies `SDL3.dll` next to `ac5.exe`; the C runtime is linked into the exe. `vulkan-1.dll` already comes with your graphics driver.
+The shaders get compiled into a `shaders` folder right next to `ac5.exe`, and that's where the game looks for them. If you ever move the exe somewhere else, take that folder with it. The C runtime and GameInput's loader are linked into the exe, so no DLL sits next to it (a DLL an older build left next to `ac5.exe` is removed). `vulkan-1.dll` already comes with your graphics driver.
 
 Every generated file is basically one gigantic function, so give it a few minutes. There shouldn't be any warnings.
 
@@ -125,7 +125,7 @@ Where your stuff goes:
 
 ### Controls
 
-Controllers go through SDL, so anything SDL recognizes as a gamepad should just work. Buttons map by position: the bottom face button is Cross, right is Circle, left is Square, top is Triangle. Bumpers are L1/R1, triggers are L2/R2, clicking the sticks gives L3/R3, and Back and Start are Select and Start.
+Controllers are read through Microsoft GameInput (install its runtime once, see [What you need](#what-you-need)). Pads that GameInput reports as gamepads, such as Xbox controllers and compatible pads, work. Pads it lists only as generic controllers are not used; a DualShock 4 over Bluetooth is one example of a pad that can show up that way. PlayStation pads can still work through Steam Input or a similar tool that presents them as an Xbox controller. Buttons map by position: the bottom face button is Cross, right is Circle, left is Square, top is Triangle. Bumpers are L1/R1, triggers are L2/R2, clicking the sticks gives L3/R3, and Back and Start are Select and Start. Ctrl+C in the console closes the game.
 
 Keyboard defaults:
 
@@ -279,9 +279,9 @@ The files in `config/slps-25418/` are made from these by the translation describ
 
 - **CMake says `Cannot find source file: .../generated/ps2_func_table.c`.** You haven't done step 3 yet, or the output went somewhere other than `generated`.
 - **CMake can't find Vulkan or `glslc`.** The Vulkan SDK isn't installed, or `VULKAN_SDK` isn't set in that terminal.
-- **CMake can't find SDL3.** `deps/` is missing or incomplete. Delete `deps/` and run the build script again.
+- **The build script fails while downloading or checking GameInput.** Either the network is down, or the SHA-256 check failed. In the second case delete `deps/gameinput` and run the build script again.
 - **The build script says clang or Visual Studio wasn't found.** Check the LLVM and Visual Studio entries under [What you need](#what-you-need). `clang` has to be on `PATH` in the terminal you run the script from, and Visual Studio needs the C++ workload.
-- **ac5.exe won't start and complains about a missing DLL.** `SDL3.dll` isn't next to it. Run the build script again, it copies it.
+- **No controller works and the log says `pad: GameInput unavailable`.** The GameInput runtime isn't installed. Run `deps/gameinput/3.5.283/redist/GameInputRedist.msi` once, then start the game again.
 - **The log says `vk: cannot open shader`.** The `shaders` folder isn't next to `ac5.exe` anymore. Put it back, or set `PS2_SHADER_DIR` to wherever the `.spv` files are.
 - **The game quits by itself with `==== WATCHDOG: the guest delivered no field for 10 seconds`.** You left out `--watchdog 0`.
 
@@ -289,4 +289,4 @@ The files in `config/slps-25418/` are made from these by the translation describ
 
 Ace Combat is a trademark of Bandai Namco Entertainment. This project isn't affiliated with or endorsed by them in any way. No game files are included, and I won't share any, so please don't ask.
 
-The code in this repo is released under the Apache License 2.0, see `LICENSE`. Dear ImGui is MIT licensed and keeps its own license in `third_party/imgui/LICENSE.txt`. Lua is MIT licensed too, see `third_party/lua/LICENSE.html`.
+The code in this repo is released under the Apache License 2.0, see `LICENSE`. Dear ImGui is MIT licensed and keeps its own license in `third_party/imgui/LICENSE.txt`. Lua is MIT licensed too, see `third_party/lua/LICENSE.html`. The GameInput header and static loader library come from Microsoft's `Microsoft.GameInput` package and are MIT licensed; the loader is linked into `ac5.exe`. The GameInput runtime is under Microsoft's own license terms and is installed by the player, it isn't redistributed here.

@@ -282,7 +282,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g.fullscreen) {
             cover_monitor(hwnd, SWP_NOACTIVATE);
         } else {
-            // Keep the client size in pixels, as SDL3 did.
+            // Keep the client size in physical pixels across the DPI change.
             const RECT *sug = reinterpret_cast<const RECT *>(lp);
             RECT client;
             GetClientRect(hwnd, &client);
@@ -323,8 +323,8 @@ int ps2_window_create(const char *title_utf8, int client_w, int client_h) {
         return -1;
 
     // An API call instead of a manifest because the build has no manifest
-    // step. SDL3 set the same awareness at video init, so window sizes keep
-    // meaning physical pixels. It fails if the awareness is already set.
+    // step. Window sizes are physical pixels everywhere in the runtime. It
+    // fails if the awareness is already set.
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     HINSTANCE inst = GetModuleHandleW(NULL);
@@ -365,8 +365,8 @@ int ps2_window_create(const char *title_utf8, int client_w, int client_h) {
         place_windowed(hwnd, MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
                        client_w, client_h, win_dpi, 0);
 
-    // IME off, as SDL3 had it when no text input is active. The Dear ImGui
-    // Win32 backend re-enables it only while one of its text fields wants it.
+    // IME off: the game has no text input. The Dear ImGui Win32 backend
+    // re-enables it only while one of its text fields wants it.
     ImmAssociateContextEx(hwnd, NULL, 0);
     return 0;
 }
@@ -387,8 +387,8 @@ void ps2_window_show(void) {
         return;
     ShowWindow(g.hwnd, SW_SHOW);
     SetForegroundWindow(g.hwnd);
-    // SDL3 suspended the screen saver by default, and XInput activity does
-    // not reset the idle timer.
+    // Keep the screen saver and display sleep away while the game runs;
+    // gamepad input does not reset the idle timer.
     SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
     g.shown = true;
 }

@@ -33,8 +33,7 @@ typedef struct {
 /* Sets per-monitor DPI awareness v2 for the process, then creates the window
    hidden, with a client area of client_w x client_h physical pixels, centred
    on the primary monitor's work area. Call before anything else in the
-   process creates a window (in particular before SDL_Init). 0 = ok, -1 =
-   failed or a window already exists. */
+   process creates a window. 0 = ok, -1 = failed or a window already exists. */
 int  ps2_window_create(const char *title_utf8, int client_w, int client_h);
 void ps2_window_destroy(void);
 /* Shows and activates the window and keeps the display awake while it lives. */
