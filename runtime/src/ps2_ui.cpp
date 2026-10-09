@@ -1,23 +1,29 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "ps2_ui.h"
+#include "ps2_os.h"
 #include "ps2_settings.h"
 
 #include "imgui.h"
-#include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
+#include "imgui_impl_win32.h"
 
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 extern "C" void ps2_log(const char *fmt, ...);
 
+// Defined in ps2_ui_win32.cpp, which is the only file here that includes windows.h.
+intptr_t ps2_ui_win32_wndproc(void *hwnd, unsigned msg, uintptr_t wparam, intptr_t lparam,
+                              int mode);
+
 namespace {
 
 bool g_init, g_visible;
-SDL_Window *g_window;
+void *g_hwnd;
 float g_max_aniso;
 float g_dpi = 1.0f;
 VkFormat g_color_format;
@@ -25,7 +31,7 @@ VkFormat g_color_format;
 enum { CAP_NONE, CAP_KEY, CAP_PAD };
 int g_cap = CAP_NONE, g_cap_act, g_cap_slot;
 bool g_cap_armed;
-Uint64 g_cap_start;
+uint64_t g_cap_start;
 Sint16 g_cap_base[SDL_GAMEPAD_AXIS_COUNT];
 
 enum { TAB_NONE = -1, TAB_KEYBOARD = 4, TAB_CONTROLLER = 5, TAB_ANALOG = 6 };
@@ -136,17 +142,16 @@ void start_capture(int kind, int act, int slot) {
     g_cap_act = act;
     g_cap_slot = slot;
     g_cap_armed = false;
-    g_cap_start = SDL_GetTicks();
+    g_cap_start = ps2_mono_ns() / 1000000;
 }
 
 void end_capture() { g_cap = CAP_NONE; }
 
 void update_capture_arming() {
     if (g_cap == CAP_NONE || g_cap_armed) return;
-    if (SDL_GetTicks() - g_cap_start < 150) return;
-    int nk = 0;
-    const bool *ks = SDL_GetKeyboardState(&nk);
-    for (int i = 0; ks && i < nk; i++)
+    if (ps2_mono_ns() / 1000000 - g_cap_start < 150) return;
+    const unsigned char *ks = ps2_window_key_state();
+    for (int i = 0; i < PS2_KEY_COUNT; i++)
         if (ks[i]) return;
     SDL_Gamepad *g = ps2_video_gamepad();
     memset(g_cap_base, 0, sizeof g_cap_base);
@@ -159,20 +164,20 @@ void update_capture_arming() {
     g_cap_armed = true;
 }
 
-bool capture_event(const SDL_Event *e) {
+// A key press while a binding is being captured. The caller always consumes
+// it, so neither the game nor the menu sees it.
+void capture_key(const ps2_win_event *e) {
+    if (e->repeat || !g_cap_armed) return;
+    if (e->key == PS2_KEY_ESCAPE) { end_capture(); return; }
+    bool clear = e->key == PS2_KEY_BACKSPACE || e->key == PS2_KEY_DELETE;
+    if (g_cap == CAP_KEY) bind_key(g_cap_act, g_cap_slot, clear ? 0 : e->key);
+    else if (clear) bind_pad(g_cap_act, g_cap_slot, 0);
+    else return;
+    end_capture();
+}
+
+bool capture_pad_event(const SDL_Event *e) {
     switch (e->type) {
-    case SDL_EVENT_KEY_DOWN: {
-        if (e->key.repeat || !g_cap_armed) return true;
-        SDL_Scancode sc = e->key.scancode;
-        if (sc == SDL_SCANCODE_ESCAPE) { end_capture(); return true; }
-        bool clear = sc == SDL_SCANCODE_BACKSPACE || sc == SDL_SCANCODE_DELETE;
-        if (g_cap == CAP_KEY) bind_key(g_cap_act, g_cap_slot, clear ? 0 : (int)sc);
-        else if (clear) bind_pad(g_cap_act, g_cap_slot, 0);
-        else return true;
-        end_capture();
-        return true;
-    }
-    case SDL_EVENT_KEY_UP:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
         return true;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
@@ -356,9 +361,9 @@ void widescreen_control() {
              "the screen; markers placed on things in the world stay on them. Needs the "
              "native 2D layer (on unless PS2_RN_2D=0).");
     }
-    if (ws && ps2_cfg.aspect == PS2_ASPECT_STRETCH && g_window) {
+    if (ws && ps2_cfg.aspect == PS2_ASPECT_STRETCH && g_hwnd) {
         int w = 0, h = 0;
-        SDL_GetWindowSizeInPixels(g_window, &w, &h);
+        ps2_window_client_size(&w, &h);
         if (h > 0 && std::fabs((float)w / (float)h - 16.0f / 9.0f) > 0.05f)
             ImGui::TextColored(WARN, "This window is not 16:9, so Stretch distorts the picture. Pick Auto.");
     }
@@ -812,11 +817,70 @@ void draw_menu() {
     if (!open) ps2_ui_set_visible(0);
 }
 
+// Raw window messages for the Win32 backend. Keys also reach the game through
+// the window layer's event queue, so while the menu is hidden nothing but
+// mouse-button releases may grow ImGui's input queue (no frame consumes it),
+// and during a rebinding capture the key goes to the capture, not to ImGui
+// navigation.
+intptr_t msg_hook(void *hwnd, unsigned msg, uintptr_t wparam, intptr_t lparam) {
+    int mode = !g_visible ? 0 : g_cap != CAP_NONE ? 1 : 2;
+    return ps2_ui_win32_wndproc(hwnd, msg, wparam, lparam, mode);
+}
+
+// The Win32 backend is built without its XInput polling so that the menu
+// follows the pad the game selected; this feeds that pad to ImGui navigation.
+void update_gamepad_nav(ImGuiIO &io) {
+    SDL_Gamepad *pad = ps2_video_gamepad();
+    if (!pad) {
+        io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+        return;
+    }
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    // A pad press must not drive the menu while the window has no keyboard focus.
+    const bool focused = ps2_window_has_focus() != 0;
+    auto button = [&](ImGuiKey key, SDL_GamepadButton b) {
+        io.AddKeyEvent(key, focused && SDL_GetGamepadButton(pad, b));
+    };
+    auto analog = [&](ImGuiKey key, SDL_GamepadAxis axis, int v0, int v1) {
+        float v = 0.0f;
+        if (focused) {
+            v = (float)(SDL_GetGamepadAxis(pad, axis) - v0) / (float)(v1 - v0);
+            v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+        }
+        io.AddKeyAnalogEvent(key, v > 0.1f, v);
+    };
+    const int dz = 8000;
+    button(ImGuiKey_GamepadStart, SDL_GAMEPAD_BUTTON_START);
+    button(ImGuiKey_GamepadBack, SDL_GAMEPAD_BUTTON_BACK);
+    button(ImGuiKey_GamepadFaceLeft, SDL_GAMEPAD_BUTTON_WEST);
+    button(ImGuiKey_GamepadFaceRight, SDL_GAMEPAD_BUTTON_EAST);
+    button(ImGuiKey_GamepadFaceUp, SDL_GAMEPAD_BUTTON_NORTH);
+    button(ImGuiKey_GamepadFaceDown, SDL_GAMEPAD_BUTTON_SOUTH);
+    button(ImGuiKey_GamepadDpadLeft, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+    button(ImGuiKey_GamepadDpadRight, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+    button(ImGuiKey_GamepadDpadUp, SDL_GAMEPAD_BUTTON_DPAD_UP);
+    button(ImGuiKey_GamepadDpadDown, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+    button(ImGuiKey_GamepadL1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+    button(ImGuiKey_GamepadR1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+    button(ImGuiKey_GamepadL3, SDL_GAMEPAD_BUTTON_LEFT_STICK);
+    button(ImGuiKey_GamepadR3, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+    analog(ImGuiKey_GamepadL2, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 0, 32767);
+    analog(ImGuiKey_GamepadR2, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0, 32767);
+    analog(ImGuiKey_GamepadLStickLeft, SDL_GAMEPAD_AXIS_LEFTX, -dz, -32768);
+    analog(ImGuiKey_GamepadLStickRight, SDL_GAMEPAD_AXIS_LEFTX, +dz, +32767);
+    analog(ImGuiKey_GamepadLStickUp, SDL_GAMEPAD_AXIS_LEFTY, -dz, -32768);
+    analog(ImGuiKey_GamepadLStickDown, SDL_GAMEPAD_AXIS_LEFTY, +dz, +32767);
+    analog(ImGuiKey_GamepadRStickLeft, SDL_GAMEPAD_AXIS_RIGHTX, -dz, -32768);
+    analog(ImGuiKey_GamepadRStickRight, SDL_GAMEPAD_AXIS_RIGHTX, +dz, +32767);
+    analog(ImGuiKey_GamepadRStickUp, SDL_GAMEPAD_AXIS_RIGHTY, -dz, -32768);
+    analog(ImGuiKey_GamepadRStickDown, SDL_GAMEPAD_AXIS_RIGHTY, +dz, +32767);
+}
+
 }
 
 int ps2_ui_init(const ps2_ui_init_info *info) {
     if (g_init) return 0;
-    if (!info || !info->window) return -1;
+    if (!info || !info->hwnd) return -1;
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
@@ -824,16 +888,16 @@ int ps2_ui_init(const ps2_ui_init_info *info) {
     io.LogFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad
                     | ImGuiConfigFlags_NoMouseCursorChange;
-    g_window = info->window;
+    g_hwnd = info->hwnd;
     g_max_aniso = info->max_anisotropy;
-    g_dpi = SDL_GetWindowDisplayScale(info->window);
+    g_dpi = ps2_window_dpi_scale();
     if (!(g_dpi > 0.0f)) g_dpi = 1.0f;
     apply_style();
     ImGui::GetStyle().ScaleAllSizes(g_dpi);
     ImGui::GetStyle().FontScaleDpi = g_dpi;
 
-    if (!ImGui_ImplSDL3_InitForVulkan(info->window)) {
-        ps2_log("ui: the Dear ImGui SDL3 backend did not initialise");
+    if (!ImGui_ImplWin32_Init(info->hwnd)) {
+        ps2_log("ui: the Dear ImGui Win32 backend did not initialise");
         ImGui::DestroyContext();
         return -1;
     }
@@ -855,10 +919,11 @@ int ps2_ui_init(const ps2_ui_init_info *info) {
     vi.CheckVkResultFn = check_vk;
     if (!ImGui_ImplVulkan_Init(&vi)) {
         ps2_log("ui: the Dear ImGui Vulkan backend did not initialise");
-        ImGui_ImplSDL3_Shutdown();
+        ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
         return -1;
     }
+    ps2_window_set_msg_hook(msg_hook);
     g_init = true;
     ps2_log("ui: Dear ImGui %s ready -- F4 opens the settings menu", IMGUI_VERSION);
     if (const char *e = getenv("PS2_UI_OPEN")) {
@@ -870,8 +935,9 @@ int ps2_ui_init(const ps2_ui_init_info *info) {
 
 void ps2_ui_shutdown(void) {
     if (!g_init) return;
+    ps2_window_set_msg_hook(nullptr);
     ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
+    ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     g_init = false;
     g_visible = false;
@@ -886,36 +952,35 @@ void ps2_ui_set_visible(int on) {
     io.ClearEventsQueue();
     io.ClearInputKeys();
     g_cap = CAP_NONE;
-    if (g_visible) {
-        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
-        SDL_ShowCursor();
-    } else {
-        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
-    }
+    if (g_visible) io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+    else io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 }
 
 int ps2_ui_blocks_game_input(void) {
     return g_init && g_visible && ps2_cfg.block_input_in_menu;
 }
 
-int ps2_ui_event(const SDL_Event *e) {
-    if (!g_init) return 0;
-    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_F4 && !e->key.repeat) {
+int ps2_ui_key_event(const ps2_win_event *e) {
+    if (!g_init || e->type != PS2_WEV_KEY_DOWN) return 0;
+    if (e->key == PS2_KEY_F4 && !e->repeat && !e->alt) {
         ps2_ui_set_visible(!g_visible);
         return 1;
     }
-    if (g_cap != CAP_NONE && capture_event(e)) return 1;
-    if (!g_visible) {
-        if (e->type == SDL_EVENT_GAMEPAD_ADDED || e->type == SDL_EVENT_GAMEPAD_REMOVED)
-            ImGui_ImplSDL3_ProcessEvent(e);
-        return 0;
+    if (g_cap != CAP_NONE) {
+        capture_key(e);
+        return 1;
     }
-    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) {
+    if (!g_visible) return 0;
+    if (e->key == PS2_KEY_ESCAPE) {
         ps2_ui_set_visible(0);
         return 1;
     }
-    ImGui_ImplSDL3_ProcessEvent(e);
     return 0;
+}
+
+int ps2_ui_pad_event(const SDL_Event *e) {
+    if (!g_init || g_cap == CAP_NONE) return 0;
+    return capture_pad_event(e) ? 1 : 0;
 }
 
 void ps2_ui_draw(VkCommandBuffer cmd) {
@@ -927,7 +992,8 @@ void ps2_ui_draw(VkCommandBuffer cmd) {
     update_capture_arming();
 
     ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplSDL3_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    update_gamepad_nav(io);
     ImGui::NewFrame();
     if (ps2_cfg.show_fps) draw_fps();
     if (g_visible) {

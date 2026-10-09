@@ -4,12 +4,14 @@
 #include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>
 
+#include "ps2_window.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct {
-    SDL_Window      *window;
+    void            *hwnd;
     VkInstance       instance;
     VkPhysicalDevice phys;
     VkDevice         device;
@@ -22,7 +24,10 @@ typedef struct {
 
 int  ps2_ui_init(const ps2_ui_init_info *info);
 void ps2_ui_shutdown(void);
-int  ps2_ui_event(const SDL_Event *e);
+/* Window-layer events; 1 = consumed, the game must not act on it. */
+int  ps2_ui_key_event(const ps2_win_event *e);
+/* SDL gamepad events; 1 = consumed by controller rebinding. */
+int  ps2_ui_pad_event(const SDL_Event *e);
 int  ps2_ui_visible(void);
 void ps2_ui_set_visible(int on);
 int  ps2_ui_blocks_game_input(void);

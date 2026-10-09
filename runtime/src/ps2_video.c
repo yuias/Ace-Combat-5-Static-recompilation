@@ -15,8 +15,9 @@
 #include <time.h>
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
+
+#include "ps2_window.h"
 
 u64 ps2_kernel_vblank_count(void);
 void ps2_pad_publish(int port, const ps2_pad_state *st);
@@ -115,7 +116,6 @@ static volatile int window_closed;
 static volatile int swap_dirty;
 static u64 stat_dropped;
 static u32 stall_drops;
-static unsigned long render_tid;
 
 static u64 mono_ms(void) { return ps2_mono_ns() / 1000000u; }
 static int in_modal_redraw;
@@ -246,7 +246,6 @@ typedef struct {
     VkDescriptorSet mset;
 } vk_frame;
 
-static SDL_Window *window;
 static char window_title[128];
 static VkInstance inst;
 static VkPhysicalDevice phys;
@@ -1106,7 +1105,7 @@ static int create_swapchain(void) {
     int w = 0, h = 0;
 
     VKCHK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps));
-    SDL_GetWindowSizeInPixels(window, &w, &h);
+    ps2_window_client_size(&w, &h);
     swap_extent = caps.currentExtent;
     if (swap_extent.width == 0xFFFFFFFFu) {
         swap_extent.width = (u32)w;
@@ -1503,8 +1502,8 @@ static int vk_init(void) {
     VkPhysicalDevice devs[16];
     u32 ndev = 16, nq;
     VkQueueFamilyProperties qprops[16];
-    const char *const *sdl_exts;
-    Uint32 nsdl = 0;
+    const char *const *win_exts;
+    uint32_t nwin = 0;
     const char *dev_exts[1] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     float prio = 1.0f;
     VkDescriptorPoolSize psz;
@@ -1526,19 +1525,21 @@ static int vk_init(void) {
     app.pApplicationName = "ps2recomp";
     app.apiVersion = VK_API_VERSION_1_3;
 
-    sdl_exts = SDL_Vulkan_GetInstanceExtensions(&nsdl);
-    if (!sdl_exts) { ps2_log("vk: SDL has no Vulkan extensions"); return -1; }
+    win_exts = ps2_window_vk_extensions(&nwin);
 
     memset(&ici, 0, sizeof(ici));
     ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ici.pApplicationInfo = &app;
-    ici.enabledExtensionCount = nsdl;
-    ici.ppEnabledExtensionNames = sdl_exts;
+    ici.enabledExtensionCount = nwin;
+    ici.ppEnabledExtensionNames = win_exts;
     VKCHK(vkCreateInstance(&ici, NULL, &inst));
 
-    if (!SDL_Vulkan_CreateSurface(window, inst, NULL, &surface)) {
-        ps2_log("vk: SDL_Vulkan_CreateSurface: %s", SDL_GetError());
-        return -1;
+    {
+        VkResult sr = ps2_window_create_vk_surface(inst, &surface);
+        if (sr != VK_SUCCESS) {
+            ps2_log("vk: cannot create the Win32 surface (%d)", (int)sr);
+            return -1;
+        }
     }
 
     VKCHK(vkEnumeratePhysicalDevices(inst, &ndev, devs));
@@ -4079,6 +4080,8 @@ enum { B_SELECT = 0, B_L3, B_R3, B_START, B_UP, B_RIGHT, B_DOWN, B_LEFT,
        B_L2, B_R2, B_L1, B_R1, B_TRIANGLE, B_CIRCLE, B_CROSS, B_SQUARE };
 
 static SDL_Gamepad *gamepad;
+/* SDL_Init(SDL_INIT_GAMEPAD) succeeded; the event and pad paths here skip SDL without it. */
+static int sdl_pad_ok;
 
 static int window_hidden;
 void ps2_video_hidden(int on) { window_hidden = on; }
@@ -4138,7 +4141,9 @@ void ps2_video_select_gamepad(SDL_JoystickID id) {
 }
 
 static void poll_input(void) {
-    const bool *keys = window_hidden ? NULL : SDL_GetKeyboardState(NULL);
+    const unsigned char *keys = window_hidden ? NULL : ps2_window_key_state();
+    /* SDL3 dropped joystick presses while its windows had no focus; keep that. */
+    const int pad_live = gamepad && ps2_window_has_focus();
     ps2_pad_state st;
     u16 kbmask = 0;
     float value[PS2_ACT_COUNT];
@@ -4153,11 +4158,11 @@ static void poll_input(void) {
         float v = 0.0f;
         for (int k = 0; k < PS2_BIND_SLOTS; k++) {
             int sc = ps2_cfg.key[act][k], code = ps2_cfg.pad[act][k];
-            if (keys && sc > 0 && sc < SDL_SCANCODE_COUNT && keys[sc]) {
+            if (keys && sc > 0 && sc < PS2_KEY_COUNT && keys[sc]) {
                 v = 1.0f;
                 if (act < PS2_ACT_BUTTONS) kbmask |= (u16)(1u << act);
             }
-            if (gamepad && code > 0) {
+            if (pad_live && code > 0) {
                 float p = padbind_value(code);
                 if (p > v) v = p;
             }
@@ -4217,7 +4222,7 @@ static void update_title(void) {
     static u64 last_fields;
     char buf[192];
     double dt;
-    if (window_hidden || !window) return;
+    if (window_hidden || !ps2_window_hwnd()) return;
     if (now - last_ms < 1000) return;
     dt = (double)(now - last_ms) / 1000.0;
     if (last_ms == 0) { last_ms = now; last_frames = stat_frames;
@@ -4227,7 +4232,7 @@ static void update_title(void) {
              window_title, (double)(fields - last_fields) / dt,
              (double)(stat_frames - last_frames) / dt,
              stat_dropped > last_dropped ? ", dropping" : "");
-    SDL_SetWindowTitle(window, buf);
+    ps2_window_set_title(buf);
     last_ms = now;
     last_frames = stat_frames;
     last_dropped = stat_dropped;
@@ -4369,27 +4374,16 @@ static void replay_frame_inner(void) {
     }
 }
 
-static bool SDLCALL modal_redraw_watch(void *ud, SDL_Event *e) {
-    (void)ud;
-    if (!vk_ready || in_modal_redraw || window_minimised) return true;
-    if (ps2_thread_self_id() != render_tid) return true;
-    switch (e->type) {
-    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-    case SDL_EVENT_WINDOW_RESIZED:
-        swap_dirty = 1;
-        break;
-    case SDL_EVENT_WINDOW_EXPOSED:
-    case SDL_EVENT_WINDOW_MOVED:
-        break;
-    default:
-        return true;
-    }
-    if (!fps_cap_due()) return true;
+/* Runs from the window procedure during the modal size/move loop, when
+   ps2_window_pump does not return, so the picture keeps updating. */
+static void modal_redraw(int resized) {
+    if (!vk_ready || in_modal_redraw || window_minimised) return;
+    if (resized) swap_dirty = 1;
+    if (!fps_cap_due()) return;
     in_modal_redraw = 1;
     take_pending_frame();
     replay_frame();
     in_modal_redraw = 0;
-    return true;
 }
 
 static void test_render_stall(void) {
@@ -4406,17 +4400,11 @@ static void test_render_stall(void) {
 }
 
 static void apply_window_settings(void) {
-    if (window_hidden || !window) return;
-    if (ps2_cfg.window_mode == PS2_WIN_WINDOWED) {
-        want_fullscreen = 0;
-        SDL_SetWindowFullscreen(window, false);
-        SDL_SetWindowSize(window, ps2_cfg.window_w, ps2_cfg.window_h);
-        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-    } else {
-        SDL_SetWindowFullscreenMode(window, NULL);
-        want_fullscreen = 1;
-        SDL_SetWindowFullscreen(window, true);
-    }
+    if (window_hidden || !ps2_window_hwnd()) return;
+    /* Set before the call so the monitor-sized RESIZED event is not saved as
+       the windowed size. */
+    want_fullscreen = ps2_cfg.window_mode != PS2_WIN_WINDOWED;
+    ps2_window_set_fullscreen(want_fullscreen, ps2_cfg.window_w, ps2_cfg.window_h);
     swap_dirty = 1;
 }
 
@@ -4434,39 +4422,87 @@ static void settings_service(void) {
 }
 
 static void pump_events(void) {
+    ps2_win_event we;
     SDL_Event e;
     test_render_stall();
-    while (SDL_PollEvent(&e)) {
-        if (ps2_ui_event(&e)) continue;
-        switch (e.type) {
-        case SDL_EVENT_QUIT:
+    /* Win32 first: SDL without video does not read this thread's window
+       messages, and SDL_PollEvent below still pumps joysticks and hotplug. */
+    ps2_window_pump();
+    while (ps2_window_next_event(&we)) {
+        if (ps2_ui_key_event(&we)) continue;
+        switch (we.type) {
+        case PS2_WEV_CLOSE:
             if (!window_hidden) window_closed = 1;
             break;
-        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-            if (!window_hidden) window_closed = 1;
-            break;
-        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-            swap_dirty = 1;
-            break;
-        case SDL_EVENT_WINDOW_RESIZED:
+        case PS2_WEV_RESIZED:
             swap_dirty = 1;
             if (ps2_cfg.window_mode == PS2_WIN_WINDOWED && !want_fullscreen
-                && !window_hidden && e.window.data1 > 0 && e.window.data2 > 0
-                && (e.window.data1 != ps2_cfg.window_w
-                    || e.window.data2 != ps2_cfg.window_h)) {
-                ps2_cfg.window_w = e.window.data1;
-                ps2_cfg.window_h = e.window.data2;
+                && !window_hidden && we.w > 0 && we.h > 0
+                && (we.w != ps2_cfg.window_w || we.h != ps2_cfg.window_h)) {
+                ps2_cfg.window_w = we.w;
+                ps2_cfg.window_h = we.h;
                 ps2_settings_touch(PS2_CFG_SAVE);
             }
             break;
-        case SDL_EVENT_WINDOW_MINIMIZED:
+        case PS2_WEV_MINIMIZED:
             window_minimised = 1;
             break;
-        case SDL_EVENT_WINDOW_RESTORED:
-        case SDL_EVENT_WINDOW_MAXIMIZED:
-        case SDL_EVENT_WINDOW_EXPOSED:
+        case PS2_WEV_RESTORED:
             window_minimised = 0;
             swap_dirty = 1;
+            break;
+        case PS2_WEV_KEY_DOWN:
+            if (we.key == PS2_KEY_ESCAPE && !window_hidden) window_closed = 1;
+            if (we.key == PS2_KEY_F9) {
+                ps2_capture_request = 1;
+                ps2_log("capture: requested; the next field will be captured");
+                printf("[F9] capturing this screen...\n");
+                fflush(stdout);
+            }
+            if (we.key == PS2_KEY_F6) {
+                int was = ps2_cap_active();
+                ps2_cap_toggle();
+                printf(was ? "[F6] capture stopping at the next field...\n"
+                           : "[F6] capture armed; press F6 again to stop it\n");
+                fflush(stdout);
+            }
+            if (we.key == PS2_KEY_F7) {
+                trace_frame = stat_frames + 1u;
+                ps2_log("draw trace: frame %llu armed from F7",
+                        (unsigned long long)trace_frame);
+                printf("[F7] tracing next frame's draws...\n");
+                fflush(stdout);
+            }
+            if (we.key == PS2_KEY_F8) {
+                ps2_statecap_request("hotkey");
+                ps2_log("state: capture requested from F8");
+                printf("[F8] capturing machine state...\n");
+                fflush(stdout);
+            }
+            if (we.key == PS2_KEY_F10) {
+                ps2_diag_armed = !ps2_diag_armed;
+                ps2_log("capture: censuses %s",
+                        ps2_diag_armed ? "ON" : "off");
+                printf("[F10] censuses %s\n", ps2_diag_armed ? "ON" : "off");
+                fflush(stdout);
+            }
+            if (we.key == PS2_KEY_F11 || (we.key == PS2_KEY_RETURN && we.alt)) {
+                ps2_cfg.window_mode = want_fullscreen ? PS2_WIN_WINDOWED
+                                                      : PS2_WIN_BORDERLESS;
+                apply_window_settings();
+                ps2_settings_touch(PS2_CFG_SAVE);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    while (sdl_pad_ok && SDL_PollEvent(&e)) {
+        if (ps2_ui_pad_event(&e)) continue;
+        switch (e.type) {
+        case SDL_EVENT_QUIT:
+            /* Ctrl+C in the console. */
+            if (!window_hidden) window_closed = 1;
             break;
         case SDL_EVENT_GAMEPAD_ADDED:
             if (!gamepad) {
@@ -4479,49 +4515,6 @@ static void pump_events(void) {
         case SDL_EVENT_GAMEPAD_REMOVED:
             if (gamepad) { SDL_CloseGamepad(gamepad); gamepad = NULL; }
             break;
-        case SDL_EVENT_KEY_DOWN:
-            if (e.key.key == SDLK_ESCAPE && !window_hidden) window_closed = 1;
-            if (e.key.key == SDLK_F9) {
-                ps2_capture_request = 1;
-                ps2_log("capture: requested; the next field will be captured");
-                printf("[F9] capturing this screen...\n");
-                fflush(stdout);
-            }
-            if (e.key.key == SDLK_F6) {
-                int was = ps2_cap_active();
-                ps2_cap_toggle();
-                printf(was ? "[F6] capture stopping at the next field...\n"
-                           : "[F6] capture armed; press F6 again to stop it\n");
-                fflush(stdout);
-            }
-            if (e.key.key == SDLK_F7) {
-                trace_frame = stat_frames + 1u;
-                ps2_log("draw trace: frame %llu armed from F7",
-                        (unsigned long long)trace_frame);
-                printf("[F7] tracing next frame's draws...\n");
-                fflush(stdout);
-            }
-            if (e.key.key == SDLK_F8) {
-                ps2_statecap_request("hotkey");
-                ps2_log("state: capture requested from F8");
-                printf("[F8] capturing machine state...\n");
-                fflush(stdout);
-            }
-            if (e.key.key == SDLK_F10) {
-                ps2_diag_armed = !ps2_diag_armed;
-                ps2_log("capture: censuses %s",
-                        ps2_diag_armed ? "ON" : "off");
-                printf("[F10] censuses %s\n", ps2_diag_armed ? "ON" : "off");
-                fflush(stdout);
-            }
-            if (e.key.key == SDLK_F11
-                || (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT))) {
-                ps2_cfg.window_mode = want_fullscreen ? PS2_WIN_WINDOWED
-                                                      : PS2_WIN_BORDERLESS;
-                apply_window_settings();
-                ps2_settings_touch(PS2_CFG_SAVE);
-            }
-            break;
         default:
             break;
         }
@@ -4532,31 +4525,23 @@ static void pump_events(void) {
 
 static void *renderer_main(void *arg) {
     (void)arg;
-    render_tid = ps2_thread_self_id();
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
-        ps2_log("vk: SDL_Init: %s", SDL_GetError());
+    if (ps2_window_create((const char *)arg ? (const char *)arg : "ps2recomp",
+                          ps2_cfg.window_w, ps2_cfg.window_h) != 0) {
+        ps2_log("vk: cannot create the window");
         ps2_mutex_lock(&list_lock);
         renderer_running = -1;
         ps2_cond_broadcast(&list_cv);
         ps2_mutex_unlock(&list_lock);
         return NULL;
     }
-    window = SDL_CreateWindow((const char *)arg ? (const char *)arg
-                                                : "ps2recomp",
-                              ps2_cfg.window_w, ps2_cfg.window_h,
-                              SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
-                              | (window_hidden ? SDL_WINDOW_HIDDEN : 0));
-    if (!window) {
-        ps2_log("vk: SDL_CreateWindow: %s", SDL_GetError());
-        ps2_mutex_lock(&list_lock);
-        renderer_running = -1;
-        ps2_cond_broadcast(&list_cv);
-        ps2_mutex_unlock(&list_lock);
-        return NULL;
-    }
+    /* Gamepads only: the window, its events and the keyboard are Win32. */
+    sdl_pad_ok = SDL_Init(SDL_INIT_GAMEPAD);
+    if (!sdl_pad_ok)
+        ps2_log("pad: SDL_Init: %s; controllers are unavailable", SDL_GetError());
     if (vk_init() != 0) {
         ps2_log("vk: initialisation failed; falling back to the software "
                 "rasteriser");
+        ps2_window_destroy();
         ps2_mutex_lock(&list_lock);
         renderer_running = -1;
         ps2_cond_broadcast(&list_cv);
@@ -4564,10 +4549,10 @@ static void *renderer_main(void *arg) {
         return NULL;
     }
     vk_ready = 1;
-    SDL_AddEventWatch(modal_redraw_watch, NULL);
+    ps2_window_set_redraw_hook(modal_redraw);
     {   ps2_ui_init_info ui;
         memset(&ui, 0, sizeof(ui));
-        ui.window = window;
+        ui.hwnd = ps2_window_hwnd();
         ui.instance = inst;
         ui.phys = phys;
         ui.device = dev;
@@ -4578,8 +4563,10 @@ static void *renderer_main(void *arg) {
         ui.max_anisotropy = max_aniso;
         if (ps2_ui_init(&ui) != 0) ps2_log("ui: settings menu unavailable");
     }
+    /* Still hidden here, so a borderless start never flashes a windowed frame. */
     if (ps2_cfg.window_mode != PS2_WIN_WINDOWED) apply_window_settings();
-    {
+    if (!window_hidden) ps2_window_show();
+    if (sdl_pad_ok) {
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
         if (ids) {
@@ -4621,13 +4608,14 @@ static void *renderer_main(void *arg) {
         field_skip_present = 0;
         update_title();
     }
-    SDL_RemoveEventWatch(modal_redraw_watch, NULL);
+    ps2_window_set_redraw_hook(NULL);
     if (ps2_settings_save_pending()) ps2_settings_save();
     ps2_mutex_lock(&gpu_lock);
     if (dev) vkDeviceWaitIdle(dev);
     pipe_cache_save(1);
     ps2_ui_shutdown();
     ps2_mutex_unlock(&gpu_lock);
+    ps2_window_destroy();
     return NULL;
 }
 
