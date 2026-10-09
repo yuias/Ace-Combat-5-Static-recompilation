@@ -67,3 +67,40 @@ once a second while the game keeps running.
 | --- | --- |
 | `PS2_SAVE_DIR=DIR` | Where memory-card files go. Default: `saves` in the current folder. |
 | `PS2_ALLOW_REGION_MISMATCH=1` | Run a disc from the other region anyway. Only useful for debugging. |
+
+### Texture dump
+
+| Variable | Meaning |
+| --- | --- |
+| `PS2_TEX_DUMP=DIR` | Write each distinct texture the renderer decodes to DIR as a PNG, for building a texture replacement pack. DIR is created if it does not exist. |
+
+Each file is named `<key>_<w>x<h>.png`: the key as 16 lowercase hex digits,
+then the size in texels. The PNG is 8-bit RGBA with straight alpha, with the
+pixels exactly as the renderer sees them. The PS2 alpha value 0x80 (opaque) is
+stored as 255, and smaller values are doubled, so a replacement texture uses the
+ordinary 0 to 255 range.
+
+The key is a 64-bit FNV-1a hash over the `w*h*4` RGBA bytes of the decoded
+texture, followed by `w` and `h` as two little-endian 32-bit words. Two
+textures with the same pixels and size share one file. A texture whose file
+already exists is not written again, so repeated runs (other scenes, the other
+region's disc) add to the same directory.
+
+Only textures decoded from the recorded upload transfers are dumped. These
+are not: render targets, mip levels above 0, and textures the renderer decodes
+from the GS memory itself (the fallback). The fallback bindings seen during the
+run are counted in the log line printed with the native texture statistics at
+exit (`texdump: ... bindings not covered`), together with the number of textures
+written, already present and failed.
+
+`index.csv` in DIR gets one line per texture written, with a header line when
+the file is created:
+
+| Column | Meaning |
+| --- | --- |
+| `key` | The file name's key. |
+| `w`, `h` | Size in texels. |
+| `psm` | Pixel storage format from TEX0. |
+| `tbp`, `tbw`, `cbp` | Texture base pointer, buffer width and palette base pointer from TEX0, as written in the register. |
+| `x0`, `y0` | Origin of the dumped window inside the uploaded texture. |
+| `field` | The GS field counter when the texture was first seen. |

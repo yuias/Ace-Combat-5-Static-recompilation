@@ -109,6 +109,7 @@ set(RUNTIME_SOURCES
     runtime/src/ps2_hle_iop.c
     runtime/src/ps2_video.c
     runtime/src/ps2_window.cpp
+    runtime/src/ps2_texpack.cpp
     runtime/src/ps2_gamepad.cpp
     runtime/src/ps2_gamepad_gi.cpp
     runtime/src/ps2_state.c
@@ -175,7 +176,7 @@ target_include_directories(ac5 PRIVATE runtime/include "${GEN_DIR}"
 # SYSTEM: searched before the Windows SDK's older GameInput.h, and the
 # header's warnings are not ours.
 target_include_directories(ac5 SYSTEM PRIVATE "${PS2_GAMEINPUT_DIR}/native/include")
-target_link_libraries(ac5 PRIVATE Vulkan::Vulkan "${GAMEINPUT_LIB}" lua54 ole32 avrt user32 imm32 gdi32 dwmapi)
+target_link_libraries(ac5 PRIVATE Vulkan::Vulkan "${GAMEINPUT_LIB}" lua54 ole32 windowscodecs avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(ac5 PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 
 option(PS2_HOOK_ENTRIES "patchable entry sleds in generated code, for mod hooks" ON)
@@ -222,7 +223,7 @@ target_include_directories(gsreplay PRIVATE runtime/include "${GEN_DIR}"
                                             ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                             ${Vulkan_INCLUDE_DIRS})
 target_include_directories(gsreplay SYSTEM PRIVATE "${PS2_GAMEINPUT_DIR}/native/include")
-target_link_libraries(gsreplay PRIVATE Vulkan::Vulkan "${GAMEINPUT_LIB}" ole32 avrt user32 imm32 gdi32 dwmapi)
+target_link_libraries(gsreplay PRIVATE Vulkan::Vulkan "${GAMEINPUT_LIB}" ole32 windowscodecs avrt user32 imm32 gdi32 dwmapi)
 target_compile_definitions(gsreplay PRIVATE PS2_BUILD_REGION=${PS2_BUILD_REGION})
 if(PS2_DIAG)
   target_compile_definitions(gsreplay PRIVATE PS2_DIAG=1)

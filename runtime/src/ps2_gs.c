@@ -7,6 +7,7 @@ extern int ps2_gif_path;
 #include "ps2_capture.h"
 #include "rn.h"
 #include "rn/rn_int.h"
+#include "ps2_texpack.h"
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
@@ -3482,6 +3483,7 @@ void ps2_gs_native_tex_report(void) {
                 (unsigned long long)st_upfail[UPF_PSM], (unsigned long long)st_upfail[UPF_NOREC],
                 (unsigned long long)st_upfail[UPF_STALE], (unsigned long long)st_upfail[UPF_NOCLUT],
                 (unsigned long long)st_upfail[UPF_CLUTSTALE]);
+    ps2_texpack_report();
 }
 
 typedef struct {
@@ -3612,12 +3614,13 @@ static void native_state_decode(ps2_vk_state *st) {
 }
 
 void ps2_gs_native_state(ps2_vk_state *st) {
-    static int sw = -1, verify = -1;
+    static int sw = -1, verify = -1, texdump = 0;
     if (sw < 0) {
         const char *e = getenv("PS2_RN_TEX");
         sw = !(e && *e == '0');
         e = getenv("PS2_RN_TEX_VERIFY");
         verify = e && *e && *e != '0';
+        texdump = ps2_texpack_dump_enabled();
     }
     fill_defer_tex = sw && !verify;
     fill_state(st);
@@ -3650,7 +3653,17 @@ void ps2_gs_native_state(ps2_vk_state *st) {
             if ((size_t)w * h * 4u <= cap && uprec_pick(x0, y0, w, h, &sel, &hash)) {
                 u64 key = ((u64)hash << 20) ^ ((u64)w << 10) ^ h;
                 idx = verify ? 0xFFFFFFFFu : ps2_vk_texture_native_find(key, hash, w, h);
-                if (idx == 0xFFFFFFFFu) uprec_fill(&sel, buf);
+                if (idx == 0xFFFFFFFFu) {
+                    uprec_fill(&sel, buf);
+                    if (texdump && !verify) {
+                        ps2_texpack_meta meta;
+                        meta.tex0 = tex0_reg();
+                        meta.x0 = x0;
+                        meta.y0 = y0;
+                        meta.field = ps2_gs_frame_count;
+                        ps2_texpack_dump(buf, w, h, &meta);
+                    }
+                }
                 if (verify) {
                     const u8 *src = ps2_vk_texture_pixels(st->tex_index);
                     int same = src != NULL;
@@ -3674,6 +3687,7 @@ void ps2_gs_native_state(ps2_vk_state *st) {
         }
         if (idx == 0xFFFFFFFFu) {
             st_uprec.fallback++;
+            if (texdump) ps2_texpack_note_uncovered();
             if (st->tex_index == GS_TEX_DEFERRED) native_state_decode(st);
             if (st->tex_index != 0xFFFFFFFFu)
                 idx = ps2_vk_texture_native(st->tex_index, x0, y0, w, h);
