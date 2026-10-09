@@ -12,7 +12,7 @@ exe = out / 'patch_test.exe'
 
 subprocess.run([toolchain.cc(), *toolchain.target_flags(),
                 '-std=gnu2x', '-O1', '-fno-strict-aliasing', '-fwrapv',
-                '-Wall', '-Wextra', '-Wno-unused-parameter',
+                '-Wall', '-Wextra', '-Wno-unused-parameter', '-DPS2_BUILD_REGION=0',
                 '-I' + str(root / 'runtime/include'),
                 str(root / 'tools/patch_test.c'),
                 str(root / 'runtime/src/ps2_patch.c'),
