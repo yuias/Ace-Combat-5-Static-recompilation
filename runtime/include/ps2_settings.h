@@ -17,9 +17,9 @@ enum {
 #define PS2_ACT_BUTTONS 16
 #define PS2_BIND_SLOTS  2
 
-/* USB HID keyboard usage ids: the numbers SDL scancodes use, so binds saved
-   by older builds keep their meaning. Only the ids the runtime names in code
-   are listed. */
+/* USB HID keyboard usage ids, the numbering ac5_settings.ini has always
+   stored, so binds saved by older builds keep their meaning. Only the ids the
+   runtime names in code are listed. */
 enum {
     PS2_KEY_A = 4, PS2_KEY_E = 8, PS2_KEY_Q = 20, PS2_KEY_S = 22,
     PS2_KEY_W = 26, PS2_KEY_X = 27, PS2_KEY_Z = 29,
@@ -33,6 +33,30 @@ enum {
     PS2_KEY_KP_2 = 90, PS2_KEY_KP_4 = 92, PS2_KEY_KP_6 = 94, PS2_KEY_KP_8 = 96,
     PS2_KEY_RSHIFT = 229,
     PS2_KEY_COUNT = 512
+};
+
+/* Gamepad button and axis ids as ac5_settings.ini stores them (a bind is
+   button + 1, or PS2_PADBIND_AXISDIR(axis, positive)). The numbering is
+   fixed: files saved by older builds use it. */
+enum {
+    PS2_PAD_BUTTON_SOUTH = 0, PS2_PAD_BUTTON_EAST = 1, PS2_PAD_BUTTON_WEST = 2,
+    PS2_PAD_BUTTON_NORTH = 3, PS2_PAD_BUTTON_BACK = 4, PS2_PAD_BUTTON_GUIDE = 5,
+    PS2_PAD_BUTTON_START = 6, PS2_PAD_BUTTON_LEFT_STICK = 7,
+    PS2_PAD_BUTTON_RIGHT_STICK = 8, PS2_PAD_BUTTON_LEFT_SHOULDER = 9,
+    PS2_PAD_BUTTON_RIGHT_SHOULDER = 10, PS2_PAD_BUTTON_DPAD_UP = 11,
+    PS2_PAD_BUTTON_DPAD_DOWN = 12, PS2_PAD_BUTTON_DPAD_LEFT = 13,
+    PS2_PAD_BUTTON_DPAD_RIGHT = 14, PS2_PAD_BUTTON_MISC1 = 15,
+    PS2_PAD_BUTTON_RIGHT_PADDLE1 = 16, PS2_PAD_BUTTON_LEFT_PADDLE1 = 17,
+    PS2_PAD_BUTTON_RIGHT_PADDLE2 = 18, PS2_PAD_BUTTON_LEFT_PADDLE2 = 19,
+    PS2_PAD_BUTTON_TOUCHPAD = 20, PS2_PAD_BUTTON_MISC2 = 21,
+    PS2_PAD_BUTTON_MISC3 = 22, PS2_PAD_BUTTON_MISC4 = 23,
+    PS2_PAD_BUTTON_MISC5 = 24, PS2_PAD_BUTTON_MISC6 = 25,
+    PS2_PAD_BUTTON_COUNT = 26
+};
+enum {
+    PS2_PAD_AXIS_LEFTX = 0, PS2_PAD_AXIS_LEFTY = 1, PS2_PAD_AXIS_RIGHTX = 2,
+    PS2_PAD_AXIS_RIGHTY = 3, PS2_PAD_AXIS_LEFT_TRIGGER = 4,
+    PS2_PAD_AXIS_RIGHT_TRIGGER = 5, PS2_PAD_AXIS_COUNT = 6
 };
 
 #define PS2_PADBIND_AXIS          0x100

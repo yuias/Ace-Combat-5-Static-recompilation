@@ -3,7 +3,6 @@
 #include "ps2_addr.h"
 #include "ps2_os.h"
 
-#include <SDL3/SDL.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stddef.h>
@@ -42,6 +41,8 @@ static const char *const pad_button_names[] = {
     "Right paddle 1", "Left paddle 1", "Right paddle 2", "Left paddle 2",
     "Touchpad", "Misc 2", "Misc 3", "Misc 4", "Misc 5", "Misc 6",
 };
+_Static_assert(sizeof pad_button_names / sizeof pad_button_names[0] == PS2_PAD_BUTTON_COUNT,
+               "one name per pad button id");
 
 const char *ps2_action_name(int act) {
     return act >= 0 && act < PS2_ACT_COUNT ? act_names[act] : "?";
@@ -92,9 +93,8 @@ int ps2_key_from_scancode(unsigned code) {
     }
 }
 
-/* Indexed by HID id; the strings are the names SDL gives scancodes (the
-   settings test compares them), so the menu and the settings file keep
-   showing the same names. NULL means no name. */
+/* Indexed by HID id; the names the menu and the settings file have always
+   shown (the settings test checks them). NULL means no name. */
 static const char *const key_names[232] = {
     [4] = "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
     "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
@@ -133,12 +133,12 @@ const char *ps2_padbind_name(int code) {
     if (code & PS2_PADBIND_AXIS) {
         int axis = (code & 0xFF) >> 1, pos = code & 1;
         switch (axis) {
-        case SDL_GAMEPAD_AXIS_LEFTX:  return pos ? "Left stick Right" : "Left stick Left";
-        case SDL_GAMEPAD_AXIS_LEFTY:  return pos ? "Left stick Down" : "Left stick Up";
-        case SDL_GAMEPAD_AXIS_RIGHTX: return pos ? "Right stick Right" : "Right stick Left";
-        case SDL_GAMEPAD_AXIS_RIGHTY: return pos ? "Right stick Down" : "Right stick Up";
-        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:  return "Left trigger";
-        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: return "Right trigger";
+        case PS2_PAD_AXIS_LEFTX:  return pos ? "Left stick Right" : "Left stick Left";
+        case PS2_PAD_AXIS_LEFTY:  return pos ? "Left stick Down" : "Left stick Up";
+        case PS2_PAD_AXIS_RIGHTX: return pos ? "Right stick Right" : "Right stick Left";
+        case PS2_PAD_AXIS_RIGHTY: return pos ? "Right stick Down" : "Right stick Up";
+        case PS2_PAD_AXIS_LEFT_TRIGGER:  return "Left trigger";
+        case PS2_PAD_AXIS_RIGHT_TRIGGER: return "Right trigger";
         default: snprintf(out, 48, "Axis %d%c", axis, pos ? '+' : '-'); return out;
         }
     }
@@ -173,30 +173,30 @@ void ps2_settings_default_bindings(ps2_settings *s, int keyboard, int pad) {
     }
     if (pad) {
         memset(s->pad, 0, sizeof s->pad);
-        s->pad[PS2_ACT_CROSS][0]    = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_SOUTH);
-        s->pad[PS2_ACT_CIRCLE][0]   = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_EAST);
-        s->pad[PS2_ACT_SQUARE][0]   = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_WEST);
-        s->pad[PS2_ACT_TRIANGLE][0] = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_NORTH);
-        s->pad[PS2_ACT_SELECT][0]   = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_BACK);
-        s->pad[PS2_ACT_START][0]    = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_START);
-        s->pad[PS2_ACT_L3][0]       = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_STICK);
-        s->pad[PS2_ACT_R3][0]       = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_STICK);
-        s->pad[PS2_ACT_L1][0]       = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-        s->pad[PS2_ACT_R1][0]       = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
-        s->pad[PS2_ACT_UP][0]       = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_UP);
-        s->pad[PS2_ACT_DOWN][0]     = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-        s->pad[PS2_ACT_LEFT][0]     = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-        s->pad[PS2_ACT_RIGHT][0]    = PS2_PADBIND_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-        s->pad[PS2_ACT_L2][0] = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1);
-        s->pad[PS2_ACT_R2][0] = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1);
-        s->pad[PS2_ACT_LS_UP][0]    = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_LEFTY, 0);
-        s->pad[PS2_ACT_LS_DOWN][0]  = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_LEFTY, 1);
-        s->pad[PS2_ACT_LS_LEFT][0]  = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_LEFTX, 0);
-        s->pad[PS2_ACT_LS_RIGHT][0] = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_LEFTX, 1);
-        s->pad[PS2_ACT_RS_UP][0]    = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_RIGHTY, 0);
-        s->pad[PS2_ACT_RS_DOWN][0]  = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_RIGHTY, 1);
-        s->pad[PS2_ACT_RS_LEFT][0]  = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_RIGHTX, 0);
-        s->pad[PS2_ACT_RS_RIGHT][0] = PS2_PADBIND_AXISDIR(SDL_GAMEPAD_AXIS_RIGHTX, 1);
+        s->pad[PS2_ACT_CROSS][0]    = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_SOUTH);
+        s->pad[PS2_ACT_CIRCLE][0]   = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_EAST);
+        s->pad[PS2_ACT_SQUARE][0]   = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_WEST);
+        s->pad[PS2_ACT_TRIANGLE][0] = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_NORTH);
+        s->pad[PS2_ACT_SELECT][0]   = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_BACK);
+        s->pad[PS2_ACT_START][0]    = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_START);
+        s->pad[PS2_ACT_L3][0]       = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_LEFT_STICK);
+        s->pad[PS2_ACT_R3][0]       = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_RIGHT_STICK);
+        s->pad[PS2_ACT_L1][0]       = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_LEFT_SHOULDER);
+        s->pad[PS2_ACT_R1][0]       = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_RIGHT_SHOULDER);
+        s->pad[PS2_ACT_UP][0]       = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_DPAD_UP);
+        s->pad[PS2_ACT_DOWN][0]     = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_DPAD_DOWN);
+        s->pad[PS2_ACT_LEFT][0]     = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_DPAD_LEFT);
+        s->pad[PS2_ACT_RIGHT][0]    = PS2_PADBIND_BUTTON(PS2_PAD_BUTTON_DPAD_RIGHT);
+        s->pad[PS2_ACT_L2][0] = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_LEFT_TRIGGER, 1);
+        s->pad[PS2_ACT_R2][0] = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_RIGHT_TRIGGER, 1);
+        s->pad[PS2_ACT_LS_UP][0]    = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_LEFTY, 0);
+        s->pad[PS2_ACT_LS_DOWN][0]  = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_LEFTY, 1);
+        s->pad[PS2_ACT_LS_LEFT][0]  = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_LEFTX, 0);
+        s->pad[PS2_ACT_LS_RIGHT][0] = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_LEFTX, 1);
+        s->pad[PS2_ACT_RS_UP][0]    = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_RIGHTY, 0);
+        s->pad[PS2_ACT_RS_DOWN][0]  = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_RIGHTY, 1);
+        s->pad[PS2_ACT_RS_LEFT][0]  = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_RIGHTX, 0);
+        s->pad[PS2_ACT_RS_RIGHT][0] = PS2_PADBIND_AXISDIR(PS2_PAD_AXIS_RIGHTX, 1);
     }
 }
 
@@ -474,12 +474,12 @@ void ps2_settings_save(void) {
         if (fd->comment[0]) fprintf(f, "%-26s = %-10s ; %s\n", fd->key, val, fd->comment);
         else fprintf(f, "%-26s = %s\n", fd->key, val);
     }
-    fprintf(f, "\n[keyboard]\n; action = primary secondary, as USB HID key codes (the numbers SDL scancodes use; 0 = unbound)\n");
+    fprintf(f, "\n[keyboard]\n; action = primary secondary, as USB HID key codes (0 = unbound)\n");
     for (int a = 0; a < PS2_ACT_COUNT; a++)
         fprintf(f, "%-26s = %3d %3d    ; %s, %s\n", act_keys[a], ps2_cfg.key[a][0],
                 ps2_cfg.key[a][1], ps2_key_name(ps2_cfg.key[a][0]),
                 ps2_key_name(ps2_cfg.key[a][1]));
-    fprintf(f, "\n[controller]\n; action = primary secondary: 1 + SDL button, or 256 | axis << 1 | positive\n");
+    fprintf(f, "\n[controller]\n; action = primary secondary: 1 + button, or 256 | axis << 1 | positive (0 = unbound)\n");
     for (int a = 0; a < PS2_ACT_COUNT; a++)
         fprintf(f, "%-26s = %3d %3d    ; %s, %s\n", act_keys[a], ps2_cfg.pad[a][0],
                 ps2_cfg.pad[a][1], ps2_padbind_name(ps2_cfg.pad[a][0]),
