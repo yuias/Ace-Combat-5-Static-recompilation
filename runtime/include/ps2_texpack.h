@@ -12,11 +12,14 @@ extern "C" {
 
 /* Where a dumped texture came from, for index.csv. tex0 is the raw TEX0
    register; x0, y0 is the origin of the window inside the texture; field is
-   the GS field counter when the texture was first seen. */
+   the GS field counter when the texture was first seen. src says which decode
+   produced the pixels. */
+enum { PS2_TEXPACK_SRC_RECORDS, PS2_TEXPACK_SRC_GS };
 typedef struct {
     uint64_t tex0;
     uint32_t x0, y0;
     uint32_t field;
+    uint32_t src;
 } ps2_texpack_meta;
 
 /* 64-bit FNV-1a over the w*h*4 RGBA bytes, then over w and h as two
@@ -38,10 +41,6 @@ int ps2_texpack_dump_enabled(void);
 /* Dumps one decoded texture (w*h RGBA8) under its key unless it was dumped
    already, in this run or an earlier one. Does nothing when dumping is off. */
 void ps2_texpack_dump(const uint8_t *rgba, uint32_t w, uint32_t h, const ps2_texpack_meta *meta);
-
-/* Counts a texture binding that did not come from the upload records and so
-   is not dumped. */
-void ps2_texpack_note_uncovered(void);
 
 /* Logs the dump counters; silent when dumping is off or nothing happened. */
 void ps2_texpack_report(void);

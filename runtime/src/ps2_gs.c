@@ -2338,6 +2338,15 @@ static u32 current_texture_inner(float *out_w, float *out_h) {
             }
         }
     }
+    if (ps2_texpack_dump_enabled()) {
+        ps2_texpack_meta meta;
+        meta.tex0 = t0;
+        meta.x0 = 0;
+        meta.y0 = 0;
+        meta.field = ps2_gs_frame_count;
+        meta.src = PS2_TEXPACK_SRC_GS;
+        ps2_texpack_dump(tex_scratch, tw, th, &meta);
+    }
     {
         u32 idx = ps2_vk_texture(key, hash, tex_scratch, tw, th);
         u32 slot = texcache_next++ % TEXCACHE_N;
@@ -3661,6 +3670,7 @@ void ps2_gs_native_state(ps2_vk_state *st) {
                         meta.x0 = x0;
                         meta.y0 = y0;
                         meta.field = ps2_gs_frame_count;
+                        meta.src = PS2_TEXPACK_SRC_RECORDS;
                         ps2_texpack_dump(buf, w, h, &meta);
                     }
                 }
@@ -3687,7 +3697,6 @@ void ps2_gs_native_state(ps2_vk_state *st) {
         }
         if (idx == 0xFFFFFFFFu) {
             st_uprec.fallback++;
-            if (texdump) ps2_texpack_note_uncovered();
             if (st->tex_index == GS_TEX_DEFERRED) native_state_decode(st);
             if (st->tex_index != 0xFFFFFFFFu)
                 idx = ps2_vk_texture_native(st->tex_index, x0, y0, w, h);

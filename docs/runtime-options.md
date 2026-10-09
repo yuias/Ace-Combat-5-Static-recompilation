@@ -86,12 +86,14 @@ textures with the same pixels and size share one file. A texture whose file
 already exists is not written again, so repeated runs (other scenes, the other
 region's disc) add to the same directory.
 
-Only textures decoded from the recorded upload transfers are dumped. These
-are not: render targets, mip levels above 0, and textures the renderer decodes
-from the GS memory itself (the fallback). The fallback bindings seen during the
-run are counted in the log line printed with the native texture statistics at
-exit (`texdump: ... bindings not covered`), together with the number of textures
-written, already present and failed.
+Both texture decodes are dumped: the one from the recorded upload transfers,
+used by the 3D model, terrain and shadow paths, and the one from GS memory,
+used by 2D drawing (fonts, HUD, menus) and as the fallback. The GS-memory
+decode covers the whole texture as TEX0 sizes it, so unused texels can hold
+leftovers from earlier uploads and give the same picture a different key. Mip
+levels above 0 are not dumped. Movies are drawn from textures too, so a run
+through one writes a file for every frame. At exit the log reports the number
+of textures written, already present and failed (`texdump: ...`).
 
 `index.csv` in DIR gets one line per texture written, with a header line when
 the file is created:
@@ -104,3 +106,4 @@ the file is created:
 | `tbp`, `tbw`, `cbp` | Texture base pointer, buffer width and palette base pointer from TEX0, as written in the register. |
 | `x0`, `y0` | Origin of the dumped window inside the uploaded texture. |
 | `field` | The GS field counter when the texture was first seen. |
+| `src` | `rec` for the upload-record decode, `gs` for the GS-memory decode. |

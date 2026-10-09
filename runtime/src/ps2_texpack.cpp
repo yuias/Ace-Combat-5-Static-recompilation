@@ -162,7 +162,7 @@ struct Dump {
     wchar_t wdir[kPathCap];
     FILE *csv;
     std::unordered_set<uint64_t> seen;
-    unsigned long long written, present, failed, uncovered;
+    unsigned long long written, present, failed;
 };
 
 Dump g;
@@ -215,7 +215,7 @@ void start() {
     if (g.csv) {
         fseek(g.csv, 0, SEEK_END);
         if (ftell(g.csv) == 0)
-            fputs("key,w,h,psm,tbp,tbw,cbp,x0,y0,field\n", g.csv);
+            fputs("key,w,h,psm,tbp,tbw,cbp,x0,y0,field,src\n", g.csv);
     } else {
         ps2_log("texdump: cannot open index.csv in %s; textures are written without an index",
                 g.dir);
@@ -275,10 +275,10 @@ void ps2_texpack_dump(const uint8_t *rgba, uint32_t w, uint32_t h, const ps2_tex
             g.written++;
             if (g.csv) {
                 uint64_t t = meta->tex0;
-                fprintf(g.csv, "%016llx,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", (unsigned long long)key, w,
+                fprintf(g.csv, "%016llx,%u,%u,%u,%u,%u,%u,%u,%u,%u,%s\n", (unsigned long long)key, w,
                         h, (unsigned)((t >> 20) & 0x3Fu), (unsigned)(t & 0x3FFFu),
                         (unsigned)((t >> 14) & 0x3Fu), (unsigned)((t >> 37) & 0x3FFFu), meta->x0,
-                        meta->y0, meta->field);
+                        meta->y0, meta->field, meta->src == PS2_TEXPACK_SRC_GS ? "gs" : "rec");
                 fflush(g.csv);
             }
         } else {
@@ -288,24 +288,14 @@ void ps2_texpack_dump(const uint8_t *rgba, uint32_t w, uint32_t h, const ps2_tex
     ReleaseSRWLockExclusive(&g.lock);
 }
 
-void ps2_texpack_note_uncovered(void) {
-    read_env();
-    if (!g.enabled)
-        return;
-    AcquireSRWLockExclusive(&g.lock);
-    g.uncovered++;
-    ReleaseSRWLockExclusive(&g.lock);
-}
-
 void ps2_texpack_report(void) {
     read_env();
     if (!g.enabled)
         return;
     AcquireSRWLockExclusive(&g.lock);
-    if (g.written || g.present || g.failed || g.uncovered)
-        ps2_log("texdump: %llu textures written, %llu already present, %llu write failures; "
-                "%llu bindings not covered (GS-decode fallback)",
-                g.written, g.present, g.failed, g.uncovered);
+    if (g.written || g.present || g.failed)
+        ps2_log("texdump: %llu textures written, %llu already present, %llu write failures",
+                g.written, g.present, g.failed);
     ReleaseSRWLockExclusive(&g.lock);
 }
 
