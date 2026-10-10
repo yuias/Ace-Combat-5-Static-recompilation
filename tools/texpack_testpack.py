@@ -13,6 +13,12 @@ Modes:
            the outermost ring of pixels becomes opaque magenta. The ring shows
            where the sprite sits at one hi-res texel width, the diagonal shows
            detail below the native pixel size.
+  bilinear K >= 2. Replacement texel (i, j) holds the native texture sampled
+           bilinearly at native coordinate ((i + 0.5) / K - 0.5, (j + 0.5) / K
+           - 0.5), clamped to the edge like the GS clamp. Straight (not
+           premultiplied) RGBA is filtered, as the GPU filters the sampled
+           image. A sprite drawn 1:1 at output scale K then matches the native
+           texture drawn with bilinear filtering up to rounding.
 
 Usage:
   texpack_testpack.py --src DIR [--src DIR ...] --out DIR --mode MODE
@@ -60,6 +66,27 @@ def make_marker(src_rgba, k):
     return hi
 
 
+def make_bilinear(src_rgba, k):
+    h, w = src_rgba.shape[:2]
+    src = src_rgba.astype(np.float64)
+
+    def axis(n):
+        u = (np.arange(n * k) + 0.5) / k - 0.5
+        u = np.clip(u, 0.0, n - 1.0)  # clamp to edge
+        i0 = np.minimum(np.floor(u).astype(np.int64), max(n - 2, 0))
+        i1 = np.minimum(i0 + 1, n - 1)
+        return i0, i1, u - i0
+
+    y0, y1, fy = axis(h)
+    x0, x1, fx = axis(w)
+    fx = fx[None, :, None]
+    fy = fy[:, None, None]
+    top = src[y0][:, x0] * (1 - fx) + src[y0][:, x1] * fx
+    bot = src[y1][:, x0] * (1 - fx) + src[y1][:, x1] * fx
+    out = top * (1 - fy) + bot * fy
+    return np.clip(np.floor(out + 0.5), 0, 255).astype(np.uint8)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -67,7 +94,7 @@ def main():
                     help="dump directory (repeatable; the first one holding a "
                     "name wins)")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--mode", choices=("copy", "nearest", "marker"), required=True)
+    ap.add_argument("--mode", choices=("copy", "nearest", "marker", "bilinear"), required=True)
     ap.add_argument("--scale", type=int, required=True)
     ap.add_argument("--psm", type=int, default=None,
                     help="keep only textures with this GS pixel format "
@@ -81,6 +108,8 @@ def main():
         sys.exit("--mode copy needs --scale 1")
     if a.mode == "marker" and a.scale < 2:
         sys.exit("--mode marker needs --scale >= 2")
+    if a.mode == "bilinear" and a.scale < 2:
+        sys.exit("--mode bilinear needs --scale >= 2")
     want_size = None
     if a.size:
         m = re.fullmatch(r"(\d+)x(\d+)", a.size)
@@ -127,6 +156,8 @@ def main():
                              % (sp, px.shape[1], px.shape[0], w, h))
                 if a.mode == "nearest":
                     hi = np.repeat(np.repeat(px, a.scale, axis=0), a.scale, axis=1)
+                elif a.mode == "bilinear":
+                    hi = make_bilinear(px, a.scale)
                 else:
                     hi = make_marker(px, a.scale)
                 Image.fromarray(np.ascontiguousarray(hi), "RGBA").save(dst)
