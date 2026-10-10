@@ -84,6 +84,7 @@ typedef struct ps2_settings {
     int   fxaa;
     float sharpen;
     int   scale_filter;
+    int   texture_pack;
     float brightness;
     float contrast;
     float gamma;

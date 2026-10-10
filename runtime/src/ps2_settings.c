@@ -278,6 +278,7 @@ static void sanitize(ps2_settings *s) {
     s->fxaa = s->fxaa != 0;
     s->sharpen = clampf(s->sharpen, 0.0f, 1.0f);
     s->scale_filter = clampi(s->scale_filter, 0, 2);
+    s->texture_pack = s->texture_pack != 0;
     s->brightness = clampf(s->brightness, -0.5f, 0.5f);
     s->contrast = clampf(s->contrast, 0.5f, 1.5f);
     s->gamma = clampf(s->gamma, 0.5f, 2.0f);
@@ -325,6 +326,7 @@ static const cfg_field fields[] = {
     FI("graphics", "anisotropy", anisotropy, "0 off, 2, 4, 8 or 16"),
     FI("graphics", "deinterlace", deinterlace, "1 weave the two fields into whole frames"),
     FI("graphics", "scale_filter", scale_filter, "0 nearest, 1 bilinear, 2 sharp bilinear"),
+    FI("graphics", "texture_pack", texture_pack, "1 replace textures from the texture pack folder (read at start)"),
     FI("postfx", "fxaa", fxaa, "1 on"),
     FF("postfx", "sharpen", sharpen, "0..1"),
     FF("postfx", "brightness", brightness, "-0.5..0.5"),

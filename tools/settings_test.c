@@ -294,6 +294,7 @@ int main(void) {
           && ps2_cfg.window_w == 1280 && ps2_cfg.window_h == 896 && ps2_cfg.widescreen == 0
           && ps2_cfg.internal_res == 1,
           "defaults differ from the pre-menu renderer");
+    CHECK(ps2_cfg.texture_pack == 0, "texture_pack is not off by default");
     for (int i = 0; i <= PS2_PRESET_ULTRA; i++) {
         ps2_settings s;
         ps2_settings_defaults(&s);
@@ -382,6 +383,7 @@ int main(void) {
         a.deadzone = 0.15f; a.axis_scale = 1.4f; a.button_deadzone = 0.2f;
         a.invert[0] = 2; a.invert[1] = 3;
         a.internal_res = 0;
+        a.texture_pack = 1;
         a.preset = ps2_settings_preset_matches(&a);
         ps2_cfg = a;
         ps2_settings_save();
@@ -396,6 +398,7 @@ int main(void) {
               && b->present_mode == PS2_PRESENT_IMMEDIATE && b->fps_limit == 90 && b->show_fps == 1
               && feq(b->ui_scale, 1.25f), "display fields did not round-trip");
         CHECK(b->internal_res == 0, "internal resolution did not round-trip (%d)", b->internal_res);
+        CHECK(b->texture_pack == 1, "texture_pack did not round-trip (%d)", b->texture_pack);
         CHECK(!memcmp(b->key, a.key, sizeof a.key) && !memcmp(b->pad, a.pad, sizeof a.pad),
               "bindings did not round-trip");
         CHECK(feq(b->deadzone, 0.15f) && feq(b->axis_scale, 1.4f) && feq(b->button_deadzone, 0.2f)
@@ -404,7 +407,7 @@ int main(void) {
 
     {
         FILE *f = fopen(ps2_settings_path(), "w");
-        fprintf(f, "[graphics]\nanisotropy = 7\npreset = 3\n[display]\nwindow_width = 10\naspect = 99\n"
+        fprintf(f, "[graphics]\nanisotropy = 7\npreset = 3\ntexture_pack = 5\n[display]\nwindow_width = 10\naspect = 99\n"
                    "[analog]\ndeadzone = 5\naxis_scale = -4\nbutton_deadzone = -1\ninvert_left = 9\n"
                    "[keyboard]\ncross = 999999 -3\n");
         fclose(f);
@@ -412,6 +415,7 @@ int main(void) {
         CHECK(ps2_cfg.anisotropy == 0 && ps2_cfg.window_w == 320 && ps2_cfg.aspect == 4
               && ps2_cfg.key[PS2_ACT_CROSS][0] == 0 && ps2_cfg.key[PS2_ACT_CROSS][1] == 0,
               "hand-edited values were not clamped");
+        CHECK(ps2_cfg.texture_pack == 1, "texture_pack = 5 did not load as 1 (%d)", ps2_cfg.texture_pack);
         CHECK(feq(ps2_cfg.deadzone, 1.0f) && feq(ps2_cfg.axis_scale, 0.01f)
               && ps2_cfg.button_deadzone == 0.0f && ps2_cfg.invert[0] == 3,
               "hand-edited analog values were not clamped to PCSX2's ranges");
