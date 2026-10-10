@@ -2349,6 +2349,7 @@ static u32 current_texture_inner(float *out_w, float *out_h) {
     }
     {
         u32 idx = ps2_vk_texture(key, hash, tex_scratch, tw, th);
+        ps2_vk_texture_attach(idx, tex_scratch, tw, th);
         u32 slot = texcache_next++ % TEXCACHE_N;
         gs_geom g;
         u32 cbp = (u32)((t0 >> 37) & 0x3FFFull) * 256u;
@@ -3492,7 +3493,6 @@ void ps2_gs_native_tex_report(void) {
                 (unsigned long long)st_upfail[UPF_PSM], (unsigned long long)st_upfail[UPF_NOREC],
                 (unsigned long long)st_upfail[UPF_STALE], (unsigned long long)st_upfail[UPF_NOCLUT],
                 (unsigned long long)st_upfail[UPF_CLUTSTALE]);
-    ps2_texpack_report();
 }
 
 typedef struct {
@@ -3690,8 +3690,10 @@ void ps2_gs_native_state(ps2_vk_state *st) {
                                     (unsigned long long)tex0_reg(), x0, y0, w, h);
                     }
                 }
-                if (idx == 0xFFFFFFFFu)
+                if (idx == 0xFFFFFFFFu) {
                     idx = ps2_vk_texture_native_rgba(key, hash, buf, w, h);
+                    if (idx != 0xFFFFFFFFu) ps2_vk_texture_attach(idx, buf, w, h);
+                }
                 if (idx != 0xFFFFFFFFu) st_uprec.native++;
             }
         }

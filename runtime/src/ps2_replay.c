@@ -578,7 +578,11 @@ int main(int argc, char **argv) {
     rn_report();
     {   extern int ps2_vk_enabled(void);
         extern void ps2_video_report(void);
-        if (ps2_vk_enabled()) ps2_video_report(); }
+        extern void ps2_texpack_report(void);
+        /* ps2_video_report prints the texpack line itself; without video the
+           dump and replacement counters still belong in the log. */
+        if (ps2_vk_enabled()) ps2_video_report();
+        else ps2_texpack_report(); }
 
     if (want_video) ps2_vk_screenshot(shot);
     else if (shot && *shot) {

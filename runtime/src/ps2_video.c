@@ -6,6 +6,7 @@
 #include "ps2_settings.h"
 #include "ps2_ui.h"
 #include "ps2_gamepad.h"
+#include "ps2_texpack.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -26,6 +27,8 @@ void ps2_pad_publish(int port, const ps2_pad_state *st);
 #define VK_MAX_DRAWS    (1u << 16)
 #define VK_MAX_TEXTURES 8192
 #define VK_TEX_BYTES    (512u << 20)
+#define VK_MAX_REPL     16384
+#define VK_REPL_BYTES   (1024ull << 20)
 
 typedef struct {
     u32 seq;
@@ -72,6 +75,9 @@ typedef struct {
     VkDeviceMemory memory;
     VkImageView view;
     VkDescriptorSet set;
+    u32 repl;        /* 1-based index into repl_tex of the pack replacement, 0 = none */
+    u32 repl_gen;    /* generation the repl link was decided for */
+    u32 scale;       /* k; used on repl_tex entries only */
 } vk_texture;
 
 static ps2_vk_vertex *rec_verts;
@@ -81,6 +87,12 @@ static int rec_overflow;
 
 static vk_texture textures[VK_MAX_TEXTURES];
 static u32 ntextures;
+
+/* Images from the texture pack. Kept apart from textures[] so the native store,
+   its CPU copies and its byte budget stay as they were; GPU-only after upload. */
+static vk_texture repl_tex[VK_MAX_REPL];
+static u32 nrepl;
+static u64 repl_bytes;
 
 #define TEX_HASH 4096u
 static s32 tex_head[TEX_HASH], tex_tail[TEX_HASH], tex_next[VK_MAX_TEXTURES];
@@ -1254,6 +1266,8 @@ static void apply_sampler_settings(void) {
     rebind_set(white_set, white_view);
     for (u32 i = 0; i < ntextures && i < VK_MAX_TEXTURES; i++)
         rebind_set(textures[i].set, textures[i].view);
+    for (u32 i = 0, n = __atomic_load_n(&nrepl, __ATOMIC_ACQUIRE); i < n; i++)
+        rebind_set(repl_tex[i].set, repl_tex[i].view);
     for (u32 k = 0; k < RT_SLOTS; k++) {
         if (!rts[k].created) continue;
         rebind_set(rts[k].set, rts[k].cview);
@@ -1646,7 +1660,7 @@ static int vk_init(void) {
     VKCHK(vkCreateCommandPool(dev, &cpi, NULL, &cmdpool));
 
     psz.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    psz.descriptorCount = VK_MAX_TEXTURES + RT_SLOTS * 3u + 32u;
+    psz.descriptorCount = VK_MAX_TEXTURES + VK_MAX_REPL + RT_SLOTS * 3u + 32u;
     {
         VkDescriptorPoolSize sizes[2];
         sizes[0] = psz;
@@ -1654,7 +1668,7 @@ static int vk_init(void) {
         sizes[1].descriptorCount = FRAMES_IN_FLIGHT;
         memset(&pci, 0, sizeof(pci));
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.maxSets = VK_MAX_TEXTURES + RT_SLOTS * 3u + 32u + FRAMES_IN_FLIGHT;
+        pci.maxSets = VK_MAX_TEXTURES + VK_MAX_REPL + RT_SLOTS * 3u + 32u + FRAMES_IN_FLIGHT;
         pci.poolSizeCount = 2;
         pci.pPoolSizes = sizes;
         VKCHK(vkCreateDescriptorPool(dev, &pci, NULL, &despool));
@@ -2230,6 +2244,34 @@ void ps2_vk_state_save(ps2_state_put put, void *ud) {
             }
         }
     }
+}
+
+/* Image function of the texture pack (ps2_texpack_set_image_fn): takes the
+   validated pixels and returns a 1-based handle into repl_tex, or 0 when the
+   store is full. The upload happens later on the renderer thread. */
+static u32 repl_create(u8 *rgba, u32 w, u32 h, u32 scale, int mips) {
+    vk_texture *r;
+    u32 levels = 1, i;
+    u64 bytes = (u64)w * h * 4u;
+    if (mips) while ((w >> levels) || (h >> levels)) levels++;
+    if (levels > 1u) bytes += bytes / 3u;
+    if (nrepl >= VK_MAX_REPL || repl_bytes + bytes > VK_REPL_BYTES) {
+        free(rgba);
+        return 0;
+    }
+    i = nrepl;
+    r = &repl_tex[i];
+    memset(r, 0, sizeof *r);
+    r->w = w;
+    r->h = h;
+    r->scale = scale;
+    r->rgba = rgba;
+    r->levels = levels;
+    r->generation = 1;
+    r->uploaded_gen = 0;
+    repl_bytes += bytes;
+    __atomic_store_n(&nrepl, i + 1u, __ATOMIC_RELEASE);
+    return i + 1u;
 }
 
 static void barrier_levels(VkCommandBuffer cmd, VkImage img, u32 base, u32 count,
@@ -3456,6 +3498,25 @@ static void render_list(VkCommandBuffer cmd, vk_frame *fr) {
         if (rep_draws[i].tex_rt && rep_draws[i].tex_rt <= RT_SLOTS)
             create_target(&rts[rep_draws[i].tex_rt - 1]);
     }
+    /* Replacements go after every native upload, so a burst of large ones
+       cannot use up the staging buffer before a native texture's turn. */
+    for (i = 0; i < rep_ndraws; i++) {
+        u16 ti = rep_draws[i].tex;
+        u32 rh;
+        vk_texture *r;
+        if (ti == 0xFFFF || ti >= ntextures) continue;
+        rh = __atomic_load_n(&textures[ti].repl, __ATOMIC_ACQUIRE);
+        if (!rh || rep_draws[i].tex_rt) continue;
+        r = &repl_tex[rh - 1u];
+        if (r->rgba && r->uploaded_gen != (int)r->generation) {
+            upload_texture(cmd, fr, r);
+            /* GPU-only: the CPU copy is not kept once the image is up. */
+            if (r->uploaded_gen == (int)r->generation) {
+                free(r->rgba);
+                r->rgba = NULL;
+            }
+        }
+    }
 
     if (ov_enabled()) ov_scan();
 
@@ -4516,6 +4577,7 @@ static void *renderer_main(void *arg) {
         ps2_mutex_unlock(&list_lock);
         return NULL;
     }
+    ps2_texpack_set_image_fn(repl_create);
     vk_ready = 1;
     ps2_window_set_redraw_hook(modal_redraw);
     ps2_gamepad_init();
@@ -5121,6 +5183,7 @@ u32 ps2_vk_texture(u64 key, u32 hash, const u8 *rgba, u32 w, u32 h) {
         }
         textures[i].hash = hash;
         textures[i].rec_seq = tex_rec_seq;
+        __atomic_store_n(&textures[i].repl, 0u, __ATOMIC_RELEASE);
         __atomic_add_fetch(&textures[i].generation, 1, __ATOMIC_RELEASE);
         return i;
     }
@@ -5155,9 +5218,24 @@ u32 ps2_vk_texture(u64 key, u32 hash, const u8 *rgba, u32 w, u32 h) {
     tex_index_add(i);
     textures[i].uploaded_gen = 0;
     textures[i].rec_seq = tex_rec_seq;
+    textures[i].repl_gen = 0;
+    __atomic_store_n(&textures[i].repl, 0u, __ATOMIC_RELEASE);
     __atomic_store_n(&textures[i].generation, 1u, __ATOMIC_RELEASE);
     tex_bytes += bytes * 2u;
     return i;
+}
+
+void ps2_vk_texture_attach(u32 idx, const u8 *rgba, u32 w, u32 h) {
+    vk_texture *t;
+    u32 gen, handle = 0, k = 1;
+    if (idx >= ntextures || !ps2_texpack_active()) return;
+    t = &textures[idx];
+    gen = __atomic_load_n(&t->generation, __ATOMIC_ACQUIRE);
+    if (t->repl_gen == gen) return;   /* already decided for this content */
+    t->repl_gen = gen;
+    if (t->w == w && t->h == h)
+        handle = ps2_texpack_lookup(rgba, w, h, t->levels > 1u, &k);
+    __atomic_store_n(&t->repl, handle, __ATOMIC_RELEASE);
 }
 
 void ps2_vk_invalidate(u32 base, u32 size) {
@@ -5283,6 +5361,7 @@ void ps2_vk_stats(u64 *f, u64 *d, u64 *v, u64 *t) {
 }
 
 void ps2_video_report(void) {
+    ps2_texpack_report();
     if (!vk_ready) { ps2_log("vk: renderer was not active"); return; }
     ps2_log("vk: %llu frames, %llu draw calls, %llu vertices, "
             "%llu texture uploads (%u cached, %.1f MB)",
@@ -5298,6 +5377,9 @@ void ps2_video_report(void) {
                 (unsigned long long)(TEXMEM_BLOCK >> 20), (double)used / (1024.0 * 1024.0),
                 (unsigned long long)stat_texmem_own);
     }
+    if (nrepl)
+        ps2_log("vk: %u replacement images (%.1f MB)", nrepl,
+                (double)repl_bytes / (1024.0 * 1024.0));
     if (stat_selfreads)
         ps2_log("vk: %llu draws read back the target they were drawing into",
                 (unsigned long long)stat_selfreads);

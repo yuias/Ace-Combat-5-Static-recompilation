@@ -137,6 +137,12 @@ u32  ps2_vk_texture_native_rgba(u64 key, u32 hash, const u8 *rgba, u32 w, u32 h)
 const u8 *ps2_vk_texture_pixels(u32 idx);
 void ps2_vk_texture_size(u32 idx, u32 *w, u32 *h);
 
+/* Links the pack replacement (if any) to texture idx, whose pixels are rgba
+   (w*h RGBA8). Called by the two decode points right after the store returned
+   idx. Does nothing when the pack is inactive or idx was already checked for
+   its current content. */
+void ps2_vk_texture_attach(u32 idx, const u8 *rgba, u32 w, u32 h);
+
 void ps2_vk_invalidate(u32 base, u32 size);
 
 #define PS2_VK_PRESENT_BLANK 0xFFFFFFFFu
