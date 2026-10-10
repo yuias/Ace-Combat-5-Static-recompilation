@@ -9,10 +9,10 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def replay(capture, fields, shot, env_extra):
-    exe = os.path.join(ROOT, "build", "clang", "gsreplay.exe")
+def replay(build, capture, fields, shot, env_extra):
+    exe = os.path.join(ROOT, build, "gsreplay.exe")
     env = dict(os.environ)
-    env["PS2_SHADER_DIR"] = os.path.join(ROOT, "build", "clang", "shaders")
+    env["PS2_SHADER_DIR"] = os.path.join(ROOT, build, "shaders")
     env["PS2_PRESENT_MODE"] = "immediate"
     env.update(env_extra)
     log = shot.replace(".ppm", ".log")
@@ -33,21 +33,37 @@ def main():
     ap.add_argument("--out", default=os.path.join("out", "rn", "compare"))
     ap.add_argument("--env", action="append", default=[],
                     help="extra NAME=VALUE for both runs")
+    ap.add_argument("--build", default=os.path.join("build", "clang"),
+                    help="build directory holding gsreplay.exe and shaders/")
+    ap.add_argument("--base", default=None,
+                    help="directory with gsreplay.exe and shaders/ used for "
+                    "run A instead of --build")
+    ap.add_argument("--values", nargs=2, default=["0", "1"], metavar=("A", "B"),
+                    help="switch values for run A and run B")
+    ap.add_argument("--tolerance", type=int, default=2,
+                    help="a pixel differs when a channel differs by more than this")
+    ap.add_argument("--expect-identical", action="store_true",
+                    help="exit 1 when any field differs or picture sizes differ")
     args = ap.parse_args()
     out = os.path.join(ROOT, args.out)
     os.makedirs(out, exist_ok=True)
     extra = dict(e.split("=", 1) for e in args.env)
     worst = 0
+    mismatch = False
+    build_a = args.base if args.base else args.build
     for f in args.fields:
-        a, la = replay(args.capture, f, os.path.join(out, "f%04d_emulated.ppm" % f),
-                       dict(extra, **{args.switch: "0"}))
-        b, lb = replay(args.capture, f, os.path.join(out, "f%04d_native.ppm" % f),
-                       dict(extra, **{args.switch: "1"}))
+        a, la = replay(build_a, args.capture, f,
+                       os.path.join(out, "f%04d_emulated.ppm" % f),
+                       dict(extra, **{args.switch: args.values[0]}))
+        b, lb = replay(args.build, args.capture, f,
+                       os.path.join(out, "f%04d_native.ppm" % f),
+                       dict(extra, **{args.switch: args.values[1]}))
         if a.shape != b.shape:
             print("field %d: picture sizes differ %s vs %s" % (f, a.shape, b.shape))
+            mismatch = True
             continue
         d = np.abs(a - b)
-        mask = d.max(axis=2) > 2
+        mask = d.max(axis=2) > args.tolerance
         n = int(mask.sum())
         Image.fromarray(np.clip(d * 4, 0, 255).astype(np.uint8)).save(
             os.path.join(out, "f%04d_diff.png" % f))
@@ -71,6 +87,8 @@ def main():
         print("            %s" % native)
         worst = max(worst, n)
     print("sheets (emulated | native | difference x4) in %s" % out)
+    if args.expect_identical and (mismatch or worst):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
