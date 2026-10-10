@@ -38,3 +38,5 @@ tests/mods_resize/
 tmp/
 
 deps/
+
+/texpack/

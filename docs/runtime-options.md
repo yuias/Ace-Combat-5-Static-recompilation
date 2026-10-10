@@ -107,3 +107,75 @@ the file is created:
 | `x0`, `y0` | Origin of the dumped window inside the uploaded texture. |
 | `field` | The GS field counter when the texture was first seen. |
 | `src` | `rec` for the upload-record decode, `gs` for the GS-memory decode. |
+
+### Texture replacement
+
+Texture replacement draws a texture from a pack folder in place of the
+texture the game uploaded. It is off by default.
+
+| Control | Meaning |
+| --- | --- |
+| `PS2_TEX_PACK=0\|1` | Turn replacement off or on. When set and non-empty, it overrides the `texture_pack` setting. |
+| `texture_pack = 0\|1` | The same switch as a setting, in the `[graphics]` section of `ac5_settings.ini`. Default 0. It is read at start. |
+| `PS2_TEX_PACK_DIR=DIR` | The pack folder. Default: `texpack` in the current folder. |
+
+Replacement is active only when it is switched on and the folder holds at
+least one file with a valid name. With it off, or with an empty pack, the
+output is the same as without the feature. With it off the runtime logs
+nothing about it.
+
+A pack is a folder of PNG files. It is searched recursively, and a file can sit
+in any subfolder. Each file is named like a dumped texture,
+`<key>_<w>x<h>.png`: the key as 16 hex digits (upper or lower case), then the
+size of the original texture in texels, each from 1 to 4096. A replacement is
+the same picture at k times the original size, with the same k on both axes.
+k is a whole number from 1 to 8, and one image can be at most 8 MiB as RGBA
+(width times height times 4 bytes). A k of 1 replaces the pixels at the
+original size. Other `.png` names are counted as ignored, and other file types
+(such as the `index.csv` of a dump) are skipped without a message. If two
+files have the same key, the first one found is used and the rest are
+reported as duplicates.
+
+The usual way to build a pack is to start from a dump (see "Texture dump"):
+
+1. Run the game with `PS2_TEX_DUMP=DIR` until the textures you want have been
+   on screen.
+2. Copy those PNG files into the pack folder.
+3. Edit or upscale them, and keep each file name unchanged. The new image must
+   be k times the size in the name.
+
+The key covers the exact decoded pixels and the size. A texture whose palette
+changes, such as a palette-animated one, has one key per palette state, so it
+needs one file for each state it should replace. A texture decoded from GS
+memory can include leftover texels from earlier uploads (see "Texture dump"),
+which gives the same picture another key. Dump the texture as it appears in
+the game and use that key.
+
+A replacement is drawn with the game's own filtering, so 2D text that the game
+draws with bilinear filtering stays bilinear at the higher resolution.
+
+These are not replaced:
+
+- Movie frames.
+- Terrain pages that the game fills tile by tile, because the key of the whole
+  page changes with each fill.
+- The cropped part of a texture that the 3D path cuts out for a clamped
+  region. It is drawn at the original resolution.
+
+Files are read only when a texture first needs them, on the thread that
+decodes the texture. A large file can cause a short pause the first time it is used. Starting with
+a large pack costs no more than reading the file names.
+
+The log shows what happened (`<dir>` is the pack folder as given):
+
+| Line | Meaning |
+| --- | --- |
+| `texpack: replacing textures from <dir>: <n> files (<n> names ignored, <n> duplicates)` | Replacement is active. |
+| `texpack: <dir> holds no replacement files; texture replacement stays off` | The folder has no valid file names. |
+| `texpack: cannot read <dir>; texture replacement stays off` | The folder is missing or unreadable. |
+| `texpack: loaded <name> at <k>x` | A file was read and accepted. Only the first 16 are logged. |
+| `texpack: rejected <name>: <reason>` | A file was refused by the rules above, such as a size that is not a whole multiple. It is not tried again. |
+| `texpack: the renderer refused <name> (replacement store full)` | The replacement store is full. Only the first refusal is logged. |
+| `texpack: duplicate <name> ignored; the first file found is used` | A repeated key. Only the first 8 are logged. |
+| `texpack: <n> textures looked up, <n> replaced from <n> files, <n> without a file, <n> files rejected, <n> refused` | Summary at exit. |
+| `vk: <n> replacement images (<n> MB)` | Summary at exit: the images the renderer holds for the pack. |
