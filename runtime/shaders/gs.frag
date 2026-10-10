@@ -130,16 +130,23 @@ void main() {
         else     tc = (v_stq.xy / max(v_stq.z, 1e-9)) * pc.tex_size;
         uint ruv = v_round_uv & (RUV_SPRITE - 1u);
         bool sprite = (v_round_uv & RUV_SPRITE) != 0u;
-        bool rt_up = pc.tex_scale > 1.0;
+        /* Bit 1 of flags.y: the image is a texture-pack replacement k = tex_scale
+           times denser than the native texture. */
+        bool repl = (pc.flags.y & 2u) != 0u;
+        bool rt_up = pc.tex_scale > 1.0 && !repl;
         ivec2 pix = ivec2(gl_FragCoord.xy);
         vec2 sub = vec2(0.0);
+        vec2 tc0 = tc;           // the fragment's own texel coordinate
+        vec2 snapd = vec2(0.0);  // snap applied to tc, in texels
         if (pc.scale > 1.0) {
             vec2 nat = floor(gl_FragCoord.xy / pc.scale);
             sub = gl_FragCoord.xy - 0.5 - nat * pc.scale;
             pix = ivec2(nat);
-            if (point && (sprite || rt_up))
-                tc += (point_rows ? vec2(0.0) : tdx * ((nat.x + 0.5) * pc.scale - gl_FragCoord.x))
-                    + tdy * ((nat.y + 0.5) * pc.scale - gl_FragCoord.y);
+            if (point && (sprite || rt_up)) {
+                snapd = (point_rows ? vec2(0.0) : tdx * ((nat.x + 0.5) * pc.scale - gl_FragCoord.x))
+                      + tdy * ((nat.y + 0.5) * pc.scale - gl_FragCoord.y);
+                tc += snapd;
+            }
         }
         if (point && ruv != 0u) {
             if (!point_rows)
@@ -160,8 +167,28 @@ void main() {
         vec4 t;
         if (point) {
             ivec2 size = textureSize(tex, 0);
-            ivec2 p = ivec2(floor(tc + (ruv == 0u ? 1.0 / 32.0 : 0.0)));
-            if (rt_up) {
+            float bias = ruv == 0u ? 1.0 / 32.0 : 0.0;
+            ivec2 p = ivec2(floor(tc + bias));
+            if (repl) {
+                // Anchored: the texel the GS rule picks for the native pixel,
+                // with the fragment placed inside its k x k block. Geometric:
+                // the hi-res texel under the fragment's own coordinate.
+                int s = int(pc.tex_scale + 0.5);
+                ivec2 pa = p * s + clamp(ivec2(floor((0.5 - snapd) * pc.tex_scale)),
+                                         ivec2(0), ivec2(s - 1));
+                ivec2 q = ivec2(floor((tc0 + bias) * pc.tex_scale));
+                ivec2 pg = ivec2(
+                    wrap_up(q.x, pc.flags.z & 3u, int(pc.clamp_uv.x), int(pc.clamp_uv.y),
+                            int(pc.tex_size.x), s),
+                    wrap_up(q.y, (pc.flags.z >> 2) & 3u, int(pc.clamp_uv.z), int(pc.clamp_uv.w),
+                            int(pc.tex_size.y), s));
+                const float e = 1.0 / 16.0;
+                bool one = pc.scale <= 1.0
+                        || (abs(abs(tdx.x) * pc.scale - 1.0) < e && abs(abs(tdy.y) * pc.scale - 1.0) < e
+                            && abs(tdx.y) * pc.scale < e && abs(tdy.x) * pc.scale < e);
+                p = ivec2(sprite && one && !point_rows ? pa.x : pg.x,
+                          sprite && one ? pa.y : pg.y);
+            } else if (rt_up) {
                 int s = int(pc.tex_scale + 0.5);
                 ivec2 k = clamp(ivec2(sub + 0.5), ivec2(0), ivec2(s - 1));
                 if (tdx.x < 0.0) k.x = s - 1 - k.x;
@@ -173,7 +200,7 @@ void main() {
         } else if ((pc.flags.z & 3u) == 3u || ((pc.flags.z >> 2) & 3u) == 3u
                    || (own && ((pc.flags.z & 3u) == 0u
                                || ((pc.flags.z >> 2) & 3u) == 0u))) {
-            if (rt_up) t = sample_region_repeat_up(unwrapped_tc);
+            if (rt_up || repl) t = sample_region_repeat_up(unwrapped_tc);
             else       t = sample_region_repeat(unwrapped_tc);
         } else {
             t = texture(tex, (tc + 0.5) / pc.img_size);

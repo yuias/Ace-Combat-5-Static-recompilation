@@ -3237,6 +3237,20 @@ static void ov_prepare(void) {
     ov_show = ov_comp.set != VK_NULL_HANDLE;
 }
 
+/* The pack replacement ready for draw d, or NULL (none, or not uploaded yet:
+   the draw then uses the native texture). Each image carries its own sampler
+   in its set, chosen from its own mip count, so a replacement made for the
+   other kind of requester (with or without mips) still samples validly. */
+static vk_texture *draw_repl(const vk_draw *d) {
+    u32 h;
+    vk_texture *r;
+    if (d->tex_rt || d->tex == 0xFFFF || d->tex >= ntextures) return NULL;
+    h = __atomic_load_n(&textures[d->tex].repl, __ATOMIC_ACQUIRE);
+    if (!h) return NULL;
+    r = &repl_tex[h - 1u];
+    return r->set && r->uploaded_gen == (int)r->generation ? r : NULL;
+}
+
 static void ov_compose(VkCommandBuffer cmd, vk_frame *fr) {
     ov_list *r = &ov_lists[1 - ov_accum];
     vk_target *src = &rts[present_rt < RT_SLOTS && rts[present_rt].created
@@ -3368,13 +3382,15 @@ static void ov_compose(VkCommandBuffer cmd, vk_frame *fr) {
         VkRect2D sc;
         gs_push pc;
         float bc[4];
+        vk_texture *rp = draw_repl(d);
         if (!pipe) continue;
         if (pipe != bound) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
             vkCmdSetLineWidth(cmd, line_w);
             bound = pipe;
         }
-        sets[0] = d->tex != 0xFFFF && d->tex < ntextures && textures[d->tex].set
+        sets[0] = rp ? rp->set
+                : d->tex != 0xFFFF && d->tex < ntextures && textures[d->tex].set
                 ? textures[d->tex].set : white_set;
         if (d->tex_rt && d->tex_rt <= RT_SLOTS) {
             vk_target *t = &rts[d->tex_rt - 1];
@@ -3419,9 +3435,10 @@ static void ov_compose(VkCommandBuffer cmd, vk_frame *fr) {
         } else {
             pc.img_size[0] = pc.img_size[1] = 1.0f;
         }
-        pc.tex_scale = d->tex_rt ? (float)rt_scale : 1.0f;
+        pc.tex_scale = d->tex_rt ? (float)rt_scale : rp ? (float)rp->scale : 1.0f;
         pc.flags[0] = d->frag_flags;
         pc.flags[1] = (d->tex != 0xFFFF || d->tex_rt) ? 1u : 0u;
+        if (rp && rp->scale > 1u) pc.flags[1] |= 2u;
         pc.flags[2] = d->wrap;
         pc.flags[3] = debug_solid;
         pc.clamp_uv[0] = d->minu;
@@ -3530,6 +3547,7 @@ static void render_list(VkCommandBuffer cmd, vk_frame *fr) {
         vk_draw *d = &rep_draws[i];
         VkPipeline pipe;
         VkDescriptorSet set = white_set;
+        vk_texture *rp = NULL;
         VkRect2D sc;
         gs_push pc;
         float fixa = (float)d->fix / 128.0f;
@@ -3639,7 +3657,9 @@ static void render_list(VkCommandBuffer cmd, vk_frame *fr) {
                 if (d->scissor[1] + 1 > inv->sdx1) inv->sdx1 = d->scissor[1] + 1;
                 if (d->scissor[3] + 1 > inv->sdy1) inv->sdy1 = d->scissor[3] + 1;
             }
+            rp = draw_repl(d);
             if (rset) set = rset;
+            else if (rp) set = rp->set;
             else if (d->tex != 0xFFFF && d->tex < ntextures
                      && textures[d->tex].set)
                 set = textures[d->tex].set;
@@ -3720,9 +3740,10 @@ static void render_list(VkCommandBuffer cmd, vk_frame *fr) {
         } else {
             pc.img_size[0] = pc.img_size[1] = 1.0f;
         }
-        pc.tex_scale = d->tex_rt ? (float)rt_scale : 1.0f;
+        pc.tex_scale = d->tex_rt ? (float)rt_scale : rp ? (float)rp->scale : 1.0f;
         pc.flags[0] = d->frag_flags;
         pc.flags[1] = (d->tex != 0xFFFF || d->tex_rt) ? 1u : 0u;
+        if (rp && rp->scale > 1u) pc.flags[1] |= 2u;
         pc.flags[2] = d->wrap;
         pc.flags[3] = debug_solid;
         pc.clamp_uv[0] = d->minu;
